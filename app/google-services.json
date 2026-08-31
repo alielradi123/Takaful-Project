@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "822889698478",
+    "project_id": "takaful-f662e",
+    "storage_bucket": "takaful-f662e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:822889698478:android:380fcf43d9cbc7afb5c93f",
+        "android_client_info": {
+          "package_name": "com.example.takaful"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "822889698478-2k6potv1jcpf9g0i0gk4q3lgk2l2vqt0.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.takaful",
+            "certificate_hash": "f38fa3917131fc6e28f79ae0743521fd9211169a"
+          }
+        },
+        {
+          "client_id": "822889698478-au4mpu2uibqnqddb57ore7824a02vu31.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBbyJWpWoWzZStKepFS4ITLaeDXCohq4hc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "822889698478-au4mpu2uibqnqddb57ore7824a02vu31.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

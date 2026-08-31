@@ -1,0 +1,2516 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="لوحة تحكم تكافل — إدارة الحالات الإنسانية والتبرعات">
+  <title>تكافل — لوحة التحكم الذكية</title>
+  <link rel="icon" type="image/webp" href="app-icon.webp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.rtl.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18/jsx-dev-runtime"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="root">
+  <div class="d-flex align-items-center justify-content-center" style="min-height:100dvh;background:#07090f">
+    <div class="text-center">
+      <div class="spinner-border text-success" style="width:2.5rem;height:2.5rem" role="status"></div>
+      <p class="mt-3 text-secondary" style="font-family:Tajawal,sans-serif">تحميل لوحة التحكم...</p>
+    </div>
+  </div>
+</div>
+
+<script type="text/babel" data-type="module">
+import { auth, db } from './firebase-config.js';
+import {
+  collection, query, orderBy, onSnapshot,
+  doc, updateDoc, deleteDoc, addDoc, setDoc, serverTimestamp, Timestamp,
+  writeBatch, increment, getDocs
+} from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
+import { requireAuth, getCurrentUserInfo, logout } from './auth.js';
+import { showToast, showConfirm, formatDate, timeAgo } from './utils.js';
+import { uploadMultipleToSupabase, deleteFromSupabase, getPathFromSupabaseUrl } from './supabase-config.js';
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── HELPERS ───
+const ini = (n='') => (n||'م').trim().split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'م';
+const catBadge = cat => {
+  if (cat === 'مالي' || cat === 'مالي قرض') return 'badge badge-beneficiary';
+  if (cat === 'طبي' || cat === 'صحة') return 'badge badge-rejected';
+  if (cat === 'عيني') return 'badge badge-completed';
+  return 'badge badge-pending';
+};
+const STATUS = {
+  pending:  {l:'معلق',   c:'badge badge-pending',dot:'#f9a825',i:'bi-clock-fill'},
+  approved: {l:'معتمد',  c:'badge badge-approved',dot:'#66BB6A',i:'bi-check-circle-fill'},
+  rejected: {l:'مرفوض', c:'badge badge-rejected',dot:'#ef5350',i:'bi-x-circle-fill'},
+  completed:{l:'مكتمل', c:'badge badge-completed',dot:'#42a5f5',i:'bi-star-fill'},
+};
+
+// ─── AVATAR ───
+const Av = ({name,size=34,r='50%',op=1}) => (
+  <div className="avatar" style={{width:size,height:size,borderRadius:r,fontSize:`${size*.38}px`,opacity:op}}>{ini(name)}</div>
+);
+
+// ─── MODAL WRAPPER ───
+function Modal({title, icon, onClose, children, footer}) {
+  return (
+    <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
+      <div className="custom-modal">
+        <div className="custom-modal-header">
+          <h3 className="custom-modal-title"><i className={`bi ${icon} me-2`} style={{color:'var(--primary-light)'}}></i>{title}</h3>
+          <button type="button" className="custom-modal-close" onClick={onClose}><i className="bi bi-x-lg"></i></button>
+        </div>
+        <div className="modal-body py-2">{children}</div>
+        {footer && <div className="custom-modal-footer">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+const Field = ({label, children}) => (
+  <div className="form-group"><label className="form-label">{label}</label>{children}</div>
+);
+
+// ─── EMPTY STATE ───
+const Empty = ({icon,title,sub}) => (
+  <div className="empty-state">
+    <i className={`bi ${icon} empty-state-icon`}></i>
+    <h3>{title}</h3>
+    {sub&&<p>{sub}</p>}
+  </div>
+);
+
+// ══════════════════════════════════════════
+// APP
+// ══════════════════════════════════════════
+function App() {
+  const [page,setPage]     = useState('home');
+  const [userInfo,setUserInfo] = useState({name:'تحميل...',email:''});
+  const [cases,setCases]   = useState([]);
+  const [donations,setDon] = useState([]);
+  const [users,setUsers]   = useState([]);
+  const [chats,setChats]   = useState([]);
+  const [loading,setLoad]  = useState(true);
+  const [shares,setShares] = useState([]);
+  const [activeChatId,setChat] = useState(null);
+  const [msgs,setMsgs]     = useState([]);
+  const [msgIn,setMsgIn]   = useState('');
+  const [clock,setClock]   = useState('');
+  const [dark,setDark]     = useState(()=>(localStorage.getItem('tk-t')||'dark')==='dark');
+  const [assignModal,setAssignModal] = useState(null);
+  const [openNewCase,setOpenNewCase] = useState(false);
+  const [verifications,setVerifications] = useState([]);
+  const [activityLogs,setActivityLogs] = useState([]);
+  const [sysSettings,setSysSettings] = useState(null);
+
+  const logActivity = async (action, details) => {
+    try {
+      await addDoc(collection(db, 'activity_logs'), {
+        action,
+        details,
+        adminName: userInfo.name || 'مجهول',
+        adminUid: auth.currentUser?.uid || 'مجهول',
+        timestamp: serverTimestamp()
+      });
+    } catch(err) { console.error('Failed to log activity:', err); }
+  };
+
+  useEffect(()=>{
+    document.documentElement.setAttribute('data-bs-theme',dark?'dark':'light');
+    localStorage.setItem('tk-t',dark?'dark':'light');
+  },[dark]);
+
+  useEffect(()=>{
+    const unsub = requireAuth(async user=>{
+      const info = await getCurrentUserInfo(user.uid);
+      setUserInfo(info); setLoad(false);
+    });
+    const tick = setInterval(()=>setClock(
+      new Intl.DateTimeFormat('ar-SA',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date())
+    ),1000);
+    return ()=>{unsub&&unsub();clearInterval(tick)};
+  },[]);
+
+  useEffect(()=>{
+    if(loading)return;
+    const subs=[
+      // cases: orderBy createdAt
+      onSnapshot(query(collection(db,'cases'),orderBy('createdAt','desc')),s=>setCases(s.docs.map(d=>({id:d.id,...d.data()})))),
+      // donations: try createdAt (actual field from donations.js)
+onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setDon(s.docs.map(d=>({id:d.id, amountOrItem: d.data().amountOrItem ?? d.data().amount ?? d.data().amountOrItem, createdAt: d.data().createdAt, ...d.data()})))),
+      onSnapshot(query(collection(db,'users'),orderBy('createdAt','desc')),s=>setUsers(s.docs.map(d=>({id:d.id,...d.data()})))),
+      onSnapshot(query(collection(db,'chats'),orderBy('lastMessageTime','desc')),s=>{
+        const all = s.docs.map(d=>({id:d.id,...d.data()}));
+        // Deduplicate: keep only the latest chat per userId
+        const seen = new Map();
+        all.forEach(ch=>{
+          if(!seen.has(ch.userId) || (ch.lastMessageTime?.seconds||0) > (seen.get(ch.userId).lastMessageTime?.seconds||0)){
+            seen.set(ch.userId,ch);
+          }
+        });
+        setChats([...seen.values()]);
+      }),
+      // shares listener
+      onSnapshot(query(collection(db,'shares'),orderBy('timestamp','desc')),s=>setShares(s.docs.map(d=>({id:d.id,...d.data()})))),
+      // identity verifications listener
+      onSnapshot(query(collection(db,'identity_verifications'),orderBy('submittedAt','desc')),s=>setVerifications(s.docs.map(d=>({id:d.id,...d.data()})))),
+      onSnapshot(query(collection(db,'activity_logs'),orderBy('timestamp','desc')),s=>setActivityLogs(s.docs.map(d=>({id:d.id,...d.data()})))),
+      onSnapshot(doc(db,'settings','general'),d=>setSysSettings(d.exists()?d.data():{}))
+    ];
+    return ()=>subs.forEach(u=>u());
+  },[loading]);
+
+  useEffect(()=>{
+    if(!activeChatId)return;
+    const u=onSnapshot(query(collection(db,'chats',activeChatId,'messages'),orderBy('createdAt','asc')),s=>setMsgs(s.docs.map(d=>({id:d.id,...d.data()}))));
+    return ()=>u();
+  },[activeChatId]);
+
+  const sendMsg = async e=>{
+    e.preventDefault();
+    if(!msgIn.trim()||!activeChatId)return;
+    try{
+      await addDoc(collection(db,'chats',activeChatId,'messages'),{text:msgIn.trim(),sender:'admin',senderName:userInfo.name,senderPhotoUrl:userInfo.photoURL||'',createdAt:serverTimestamp()});
+      await updateDoc(doc(db,'chats',activeChatId),{lastMessage:msgIn.trim(),lastMessageTime:serverTimestamp()});
+      setMsgIn('');
+    }catch(e){showToast('error','خطأ',e.message)}
+  };
+
+  const doDelMsg = async (chatId, msgId) => {
+    if(!await showConfirm('حذف رسالة','حذف هذه الرسالة نهائياً؟','🗑️'))return;
+    try {
+      await deleteDoc(doc(db,'chats',chatId,'messages',msgId));
+      showToast('success','تم الحذف','تم حذف الرسالة بنجاح');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+  const doEditMsg = async (chatId, msgId, newText) => {
+    if(!newText || !newText.trim()) return;
+    try {
+      await updateDoc(doc(db,'chats',chatId,'messages',msgId),{text:newText.trim(), updatedAt:serverTimestamp()});
+      showToast('success','تم التعديل','تم تعديل الرسالة بنجاح');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+
+  const doDelChat = async (chatId, userName) => {
+    if(!await showConfirm('حذف المحادثة',`حذف محادثة "${userName||'مستخدم'}" بالكامل؟ سيتم حذف جميع الرسائل نهائياً.`,'🗑️')) return;
+    try {
+      // Delete all messages first
+      const msgsSnap = await getDocs(collection(db,'chats',chatId,'messages'));
+      const delMsgs = msgsSnap.docs.map(d => deleteDoc(doc(db,'chats',chatId,'messages',d.id)));
+      await Promise.all(delMsgs);
+      // Delete the chat thread
+      await deleteDoc(doc(db,'chats',chatId));
+      if(activeChatId === chatId) setChat(null);
+      logActivity('حذف محادثة', `تم حذف محادثة المستخدم: ${userName||'مستخدم'}`);
+      showToast('success','تم الحذف','تم حذف المحادثة بنجاح');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+
+  // ─ Case actions ─
+  const doApprove = async(id,t)=>{if(!await showConfirm('موافقة',`الموافقة على "${t}"؟`,'✅'))return;try{await updateDoc(doc(db,'cases',id),{status:'approved',approvedAt:serverTimestamp()});logActivity('موافقة على حالة', `تمت الموافقة على حالة: ${t}`);showToast('success','تمت الموافقة',`"${t}" معتمدة`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doReject  = async(id,t)=>{if(!await showConfirm('رفض',`رفض "${t}"؟`,'❌'))return;try{await updateDoc(doc(db,'cases',id),{status:'rejected',rejectedAt:serverTimestamp()});logActivity('رفض حالة', `تم رفض حالة: ${t}`);showToast('warning','مرفوضة',`"${t}" مرفوضة`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doComplete= async(id,t)=>{if(!await showConfirm('إتمام',`تعيين "${t}" كمكتملة؟`,'🏁'))return;try{await updateDoc(doc(db,'cases',id),{status:'completed',completedAt:serverTimestamp()});logActivity('إكمال حالة', `تم اكتمال حالة: ${t}`);showToast('success','مكتملة',`"${t}" مكتملة`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doDelCase = async(id,t)=>{if(!await showConfirm('حذف الحالة',`حذف "${t}" نهائياً؟`,'🗑️'))return;try{await deleteDoc(doc(db,'cases',id));logActivity('حذف حالة', `تم حذف حالة: ${t}`);showToast('success','تم الحذف',`تم حذف "${t}"`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doUpdateRaisedAmount = async(id,t,curr)=>{
+    const val = window.prompt(`تحديث المبلغ المُجمّع لحالة "${t}":`, curr);
+    if (val === null) return;
+    const parsed = parseFloat(val);
+    if (isNaN(parsed) || parsed < 0) {
+      showToast('error', 'خطأ', 'يرجى إدخال مبلغ صحيح');
+      return;
+    }
+    try {
+      const target = cases.find(c => c.id === id);
+      const limit = target ? (target.targetAmount || target.amountRequired || 0) : 0;
+      const progress = limit > 0 ? Math.min(parsed / limit, 1.0) : 0;
+      await updateDoc(doc(db, 'cases', id), {
+        raisedAmount: parsed,
+        amountRaised: parsed,
+        progress: progress,
+        updatedAt: serverTimestamp()
+      });
+      logActivity('تحديث مبلغ مجمع', `تم تحديث المبلغ للحالة ${t} إلى ${parsed}`);
+      showToast('success', 'تم التحديث', 'تم تحديث المبلغ المُجمّع بنجاح');
+    } catch(e) { showToast('error', 'خطأ', e.message); }
+  };
+  // Donation actions
+  const doDelDon = async(donation)=>{
+    if(!await showConfirm('حذف التبرع',`حذف تبرع "${donation.donorName||donation.caseTitle||'مجهول'}" نهائياً؟`,'🗑️'))return;
+    try {
+      await deleteDoc(doc(db,'donations',donation.id));
+      
+      if(donation.status === 'تم التوزيع' && donation.caseId) {
+        const amount = donation.amount || parseFloat((donation.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
+        if(amount > 0) {
+          try {
+            await updateDoc(doc(db,'cases',donation.caseId),{
+              raisedAmount: increment(-amount),
+              amountRaised: increment(-amount)
+            });
+          } catch(err) {
+            console.warn('Could not update case amount:', err);
+          }
+        }
+      }
+      logActivity('حذف تبرع', `تم حذف تبرع يخص: ${donation.donorName||donation.caseTitle||'مجهول'}`);
+      showToast('success','تم الحذف','تم حذف التبرع بنجاح');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+  const doDonStat = async(id,status)=>{try{await updateDoc(doc(db,'donations',id),{status,updatedAt:serverTimestamp()});logActivity('تحديث تبرع', `تم تحديث حالة تبرع إلى: ${status}`);showToast('success','تحديث','تم تحديث حالة التبرع')}catch(e){showToast('error','خطأ',e.message)}};
+
+  // تأكيد الاستلام — يكتب receivedAt حقيقي في Firebase
+  const doConfirmReceived = async(id, donorName)=>{
+    if(!await showConfirm('تأكيد الاستلام', `تأكيد استلام تبرع "${donorName||'مجهول'}"؟`, '💜'))return;
+    try {
+      await updateDoc(doc(db,'donations',id),{
+        status: 'تم الاستلام',
+        receivedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      logActivity('تأكيد استلام', `تم تأكيد استلام تبرع من: ${donorName||'مجهول'}`);
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#42A5F5', '#66BB6A', '#F9A825'] });
+      showToast('success','تم الاستلام ✓', `تم تأكيد استلام تبرع "${donorName||'مجهول'}"`);
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+
+  // تأكيد التوزيع — يكتب distributedAt ويحدّث raisedAmount في الحالة
+  const doConfirmDistributed = async(donation)=>{
+    if(!await showConfirm('تأكيد التوزيع', `تأكيد توزيع تبرع "${donation.donorName||'مجهول'}" على المستفيد؟`, '✅'))return;
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db,'donations',donation.id),{
+        status: 'تم التوزيع',
+        distributedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      const amount = donation.amount || parseFloat((donation.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
+      if(donation.caseId && amount > 0) {
+        batch.update(doc(db,'cases',donation.caseId),{
+          raisedAmount: increment(amount),
+          amountRaised: increment(amount),
+          updatedAt: serverTimestamp()
+        });
+      }
+      await batch.commit();
+      logActivity('تأكيد توزيع', `تم توزيع تبرع من: ${donation.donorName||'مجهول'}`);
+      confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: ['#66BB6A', '#FFF', '#2E7D32'] });
+      showToast('success','تم التوزيع ✅', 'تم التوزيع وتحديث تقدم الحالة');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+
+  // User actions
+  const doDelLog = async(id) => {
+    if(!await showConfirm('حذف السجل','هل أنت متأكد من حذف هذا السجل نهائياً؟','🗑️')) return;
+    try {
+      await deleteDoc(doc(db,'activity_logs',id));
+      showToast('success','تم الحذف','تم حذف السجل بنجاح');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+  const doClearLogs = async() => {
+    if(activityLogs.length === 0) return;
+    if(!await showConfirm('مسح السجل بالكامل','هل أنت متأكد من مسح جميع سجلات العمليات؟ لا يمكن التراجع عن هذا الإجراء!','⚠️')) return;
+    try {
+      const batch = writeBatch(db);
+      activityLogs.forEach(log => {
+        batch.delete(doc(db,'activity_logs',log.id));
+      });
+      await batch.commit();
+      showToast('success','تم المسح','تم مسح السجل بالكامل بنجاح');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+
+  const doToggle  = async(id,stat,name,role)=>{if(role==='admin'){showToast('error','غير مسموح','لا يمكن تعليق حساب مدير');return;}const ns=stat==='active'?'suspended':'active';if(!await showConfirm(ns==='suspended'?'تعليق':'تفعيل',`${ns==='suspended'?'تعليق':'تفعيل'} حساب "${name}"؟`,ns==='suspended'?'🔒':'🔓'))return;try{await updateDoc(doc(db,'users',id),{status:ns});logActivity('تحديث حالة مستخدم', `تم ${ns==='suspended'?'تعليق':'تفعيل'} حساب: ${name}`);showToast('success','تم',`${ns==='suspended'?'تم تعليق':'تم تفعيل'} "${name}"`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doDelUser = async(id,name,role)=>{if(role==='admin'){showToast('error','غير مسموح','لا يمكن حذف حساب مدير');return;}if(!await showConfirm('حذف المستخدم',`حذف "${name}" نهائياً؟`,'🗑️'))return;try{await deleteDoc(doc(db,'users',id));logActivity('حذف مستخدم', `تم حذف المستخدم: ${name}`);showToast('success','تم الحذف',`تم حذف "${name}"`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doChangeRole = async(id,name,newRole)=>{try{await updateDoc(doc(db,'users',id),{role:newRole, accountType:newRole, updatedAt:serverTimestamp()});logActivity('تحديث دور مستخدم', `تم تغيير دور ${name} إلى ${newRole}`);showToast('success','تم التحديث',`تم تغيير دور "${name}"`)}catch(e){showToast('error','خطأ',e.message)}};
+  const doDelVerification = async(id,name)=>{if(!await showConfirm('حذف طلب التحقق',`حذف طلب تحقق "${name}" نهائياً؟`,'🗑️'))return;try{await deleteDoc(doc(db,'identity_verifications',id));logActivity('حذف طلب تحقق', `تم حذف طلب تحقق: ${name}`);showToast('success','تم الحذف',`تم حذف الطلب "${name}"`)}catch(e){showToast('error','خطأ',e.message)}};
+  if(loading)return(
+    <div className="d-flex align-items-center justify-content-center" style={{minHeight:'100dvh',background:'var(--bg-dark)'}}>
+      <div className="text-center">
+        <div className="spinner-border text-success mb-3" style={{width:'2.5rem',height:'2.5rem'}}></div>
+        <p style={{color:'var(--text-secondary)',fontFamily:'inherit'}}>جارٍ التحقق...</p>
+      </div>
+    </div>
+  );
+
+  const pending  = cases.filter(c=>c.status==='pending');
+  const approved = cases.filter(c=>c.status==='approved');
+  const totalAmt = donations.reduce((s,d)=>s+(parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0),0);
+
+  const NAV_GROUPS={'main':'الرئيسية','data':'إدارة البيانات','analytics':'التحليلات والتقارير','system':'إعدادات النظام'};
+  const NAV=[
+    {id:'home',l:'الرئيسية',icon:'bi-grid-1x2-fill',g:'main'},
+    {id:'pending',l:'الحالات المعلقة',icon:'bi-hourglass-split',g:'main',badge:pending.length},
+    {id:'cases',l:'جميع الحالات',icon:'bi-journal-medical',g:'main'},
+    {id:'donations',l:'التبرعات',icon:'bi-heart-fill',g:'data'},
+    {id:'users',l:'المستخدمون',icon:'bi-people-fill',g:'data'},
+    {id:'verifications',l:'التحقق من الهوية',icon:'bi-shield-check',g:'data',badge:verifications.filter(v=>v.verificationStatus==='pending').length},
+    {id:'chats',l:'الدعم',icon:'bi-chat-dots-fill',g:'data'},
+    {id:'reports',l:'التقارير المالية',icon:'bi-bar-chart-fill',g:'analytics'},
+    {id:'shares',l:'المشاركات',icon:'bi-share-fill',g:'analytics'},
+    {id:'activity',l:'سجل العمليات',icon:'bi-clock-history',g:'system'},
+    {id:'settings',l:'إعدادات النظام',icon:'bi-gear-fill',g:'system'}
+  ];
+  const TTLS={
+    home:['لوحة القيادة','متابعة إحصائيات تكافل'],
+    pending:['الحالات المعلقة','مراجعة الحالات المقدمة'],
+    cases:['جميع الحالات','إدارة وتحديث الحالات'],
+    donations:['التبرعات والمساهمات','إدارة التبرعات والحوالات'],
+    users:['المستخدمون','إدارة حسابات المستخدمين'],
+    verifications:['التحقق من الهوية','مراجعة طلبات التحقق للمستفيدين والمتطوعين'],
+    chats:['الدعم والمحادثات','التواصل مع المستخدمين'],
+    reports:['التقارير المالية','إحصاءات وتحليلات مالية تفاعلية'],
+    shares:['المشاركات','تتبع انتشار حملات التبرع'],
+    activity:['سجل العمليات','تتبع حركات ومسؤوليات النظام'],
+    settings:['إعدادات النظام','إدارة إعدادات الموقع وتطبيق الأندرويد']
+  };
+
+  return (
+    <div className="dashboard-layout">
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo" style={{background:'transparent', boxShadow:'none'}}>
+            <img src="app-icon.webp" alt="Takaful Logo" style={{width:'100%', height:'100%', objectFit:'contain', filter: 'drop-shadow(0px 4px 12px rgba(232, 80, 10, 0.35))'}} />
+          </div>
+          <div className="sidebar-brand">
+            <h2>تـكـافـل</h2>
+            <p>بوابة التحكم</p>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {['main','data','analytics','system'].map(g=>(
+            <div key={g}>
+              <div className="nav-section-title">{NAV_GROUPS[g]}</div>
+              {NAV.filter(n=>n.g===g).map(n=>(
+                <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>setPage(n.id)} role="button">
+                  <i className={`bi ${n.icon} nav-icon`}></i>
+                  <span style={{flex:1}}>{n.l}</span>
+                  {n.badge>0&&<span className="nav-badge">{n.badge}</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="user-info" style={{flexDirection:'column',gap:10,padding:'14px 16px',alignItems:'flex-start',borderRadius:'var(--radius-sm)',background:'var(--bg-glass)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,width:'100%'}}>
+              {userInfo.photoURL
+                ? <img src={userInfo.photoURL} alt={userInfo.name} style={{width:38,height:38,borderRadius:'50%',objectFit:'cover',border:'none',flexShrink:0, background:'#FFFFFF'}} />
+                : <Av name={userInfo.name} />}
+              <div style={{flex:1,minWidth:0}}>
+                <div className="user-name truncate">{userInfo.name}</div>
+                <div className="user-role truncate">{userInfo.role ? userInfo.role : (userInfo.accountType || '—')}</div>
+              </div>
+            </div>
+            <button
+              onClick={logout}
+              style={{width:'100%',padding:'9px 14px',borderRadius:'var(--radius-sm)',background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.2)',color:'#F87171',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8,transition:'all 0.2s ease'}}
+              onMouseEnter={e=>{e.currentTarget.style.background='rgba(239,68,68,0.2)'}}
+              onMouseLeave={e=>{e.currentTarget.style.background='rgba(239,68,68,0.1)'}}
+            >
+              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <div className="main-content">
+        <header className="topbar">
+          <div style={{flex:1}}>
+            <h1 className="topbar-title">{TTLS[page]?.[0]}</h1>
+            <p className="topbar-subtitle">{TTLS[page]?.[1]}</p>
+          </div>
+          <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            {/* Add Case pill */}
+            <button type="button"
+              className="d-none d-md-inline-flex"
+              onClick={()=>{ setPage('cases'); setOpenNewCase(true); }}
+              style={{display:'flex',alignItems:'center',gap:7,padding:'8px 16px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
+              onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
+              onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
+            >
+              <i className="bi bi-plus-circle-fill"></i>إضافة حالة
+            </button>
+
+            {/* Live indicator */}
+            <div className="live-dot d-none d-sm-inline-flex">Firebase</div>
+            <div className="topbar-time">{clock}</div>
+
+            {/* Day/Night pill toggle */}
+            <button
+              type="button"
+              onClick={()=>setDark(d=>!d)}
+              title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
+              style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(20,20,50,0.95)':'rgba(255,210,60,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.25)':'rgba(249,168,37,0.4)',cursor:'pointer',transition:'all 0.35s ease',backdropFilter:'blur(10px)',gap:2,minWidth:70}}
+            >
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'none':'0 2px 8px rgba(249,168,37,0.5)'}}>☀️</span>
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.85)':'transparent',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'0 2px 8px rgba(99,102,241,0.5)':'none'}}>🌙</span>
+            </button>
+          </div>
+        </header>
+        <main className="page-content">
+          {page==='home'      && <HomeView cases={cases} donations={donations} users={users} totalAmt={totalAmt} pending={pending} approved={approved} doApprove={doApprove} doReject={doReject} />}
+          {page==='pending'   && <PendingView cases={pending} doApprove={doApprove} doReject={doReject} doDelCase={doDelCase} />}
+          {page==='cases'     && <CasesView cases={cases} users={users} doApprove={doApprove} doReject={doReject} doComplete={doComplete} doDelCase={doDelCase} doUpdateRaisedAmount={doUpdateRaisedAmount} setAssignModal={setAssignModal} openNewCase={openNewCase} setOpenNewCase={setOpenNewCase} />}
+          {page==='donations' && <DonationsView donations={donations} cases={cases} users={users} doDonStat={doDonStat} doDelDon={doDelDon} doConfirmReceived={doConfirmReceived} doConfirmDistributed={doConfirmDistributed} />}
+          {page==='users'     && <UsersView users={users} doToggle={doToggle} doDelUser={doDelUser} doChangeRole={doChangeRole} />}
+          {page==='verifications' && <VerificationsView verifications={verifications} doDelVerification={doDelVerification} />}
+          {page==='chats'     && <ChatsView chats={chats} msgs={msgs} activeChatId={activeChatId} setChat={setChat} sendMsg={sendMsg} msgIn={msgIn} setMsgIn={setMsgIn} userInfo={userInfo} users={users} doDelMsg={doDelMsg} doEditMsg={doEditMsg} doDelChat={doDelChat} />}
+          {page==='reports'   && <ReportsView donations={donations} cases={cases} users={users} />}
+          {page==='shares'    && <SharesView shares={shares} cases={cases} />}
+          {page==='activity'  && <ActivityView logs={activityLogs} doDelLog={doDelLog} doClearLogs={doClearLogs} />}
+          {page==='settings'  && <SettingsView sysSettings={sysSettings} logActivity={logActivity} cases={cases} users={users} donations={donations} activityLogs={activityLogs} />}
+        </main>
+      </div>
+
+      {/* VOLUNTEER ASSIGN MODAL */}
+      {assignModal && <AssignVolunteerModal caseItem={assignModal} users={users} onClose={()=>setAssignModal(null)} />}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// HOME VIEW
+// ══════════════════════════════════════════
+function HomeView({cases,donations,pending,approved,totalAmt,users,doApprove,doReject}) {
+  const completed=cases.filter(c=>c.status==='completed');
+  const rejected =cases.filter(c=>c.status==='rejected');
+  const STATS=[
+    {l:'الحالات الكلية',v:cases.length,   sub:`${approved.length} معتمدة`,  icon:'bi-journal-medical',c:'stat-green'},
+    {l:'حالات معلقة',   v:pending.length,  sub:'تحتاج مراجعة',              icon:'bi-hourglass-split', c:'stat-gold'},
+    {l:'المستخدمون',    v:users.length,    sub:'مسجّل في النظام',           icon:'bi-people-fill',     c:'stat-blue'},
+    {l:'إجمالي التبرعات',v:`${totalAmt.toLocaleString('ar')} ج.س`,sub:`${donations.length} عملية`,icon:'bi-heart-fill',c:'stat-red'},
+  ];
+  return (
+    <div>
+      <div className="stats-grid">
+        {STATS.map((s,i)=>(
+          <div className={`stat-card ${s.c}`} key={i}>
+            <div className="stat-icon"><i className={`bi ${s.icon}`}></i></div>
+            <div>
+              <div className="stat-value">{s.v}</div>
+              <div className="stat-label">{s.l}</div>
+              <div className="stat-trend" style={{opacity:0.75}}>{s.sub}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="row g-3">
+        <div className="col-xl-7">
+          <div className="card h-100">
+            <div className="card-header">
+              <div className="card-title">
+                <i className="bi bi-hourglass-split card-title-icon" style={{color:'var(--gold)'}}></i>
+                <div>
+                  <div className="bold">أحدث الحالات المعلقة</div>
+                  <div className="text-muted text-xs">في انتظار مراجعتك</div>
+                </div>
+              </div>
+              <span className="badge badge-pending">{pending.length} حالة</span>
+            </div>
+            <div className="card-body p-0">
+              {pending.length===0
+                ? <Empty icon="bi-check-all" title="لا توجد حالات معلقة" sub="أُنجزت جميع المراجعات!" />
+                : pending.slice(0,5).map(c=>(
+                  <div key={c.id} className="d-flex align-items-center gap-3 px-4 py-3" style={{borderBottom:'1px solid var(--border)'}}>
+                    <Av name={c.applicantName} size={32} />
+                    <div style={{flex:1,minWidth:0}}>
+                      <div className="bold truncate" style={{fontSize:'14px'}}>{c.applicantName||c.title||'غير محدد'}</div>
+                      <div className="text-muted text-xs truncate">{c.title||'—'} • {c.location||c.city||''}</div>
+                    </div>
+                    <span className={catBadge(c.category)}>{c.category}</span>
+                    <div className="d-flex gap-2">
+                      <button className="btn btn-icon btn-approve btn-sm" onClick={()=>doApprove(c.id,c.title||c.applicantName)} title="موافقة"><i className="bi bi-check-lg"></i></button>
+                      <button className="btn btn-icon btn-reject btn-sm" onClick={()=>doReject(c.id,c.title||c.applicantName)} title="رفض"><i className="bi bi-x-lg"></i></button>
+                    </div>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        </div>
+        <div className="col-xl-5">
+          <div className="card h-100">
+            <div className="card-header">
+              <div className="card-title">
+                <i className="bi bi-pie-chart-fill card-title-icon" style={{color:'var(--primary)'}}></i>
+                <div className="bold">ملخص الحالات</div>
+              </div>
+            </div>
+            <div className="card-body">
+              {[
+                {l:'معلقة',  v:pending.length,   c:'var(--gold)',i:'bi-hourglass-split'},
+                {l:'معتمدة', v:approved.length,  c:'var(--primary-light)',i:'bi-check-circle-fill'},
+                {l:'مكتملة', v:completed.length, c:'var(--blue-light)',i:'bi-star-fill'},
+                {l:'مرفوضة', v:rejected.length,  c:'var(--red-light)',i:'bi-x-circle-fill'},
+              ].map((it,i)=>(
+                <div key={i} className="mb-3">
+                  <div className="d-flex justify-content-between align-items-center mb-1">
+                    <div className="d-flex align-items-center gap-2 bold text-sm">
+                      <i className={`bi ${it.i}`} style={{color:it.c}}></i>{it.l}
+                    </div>
+                    <span className="text-muted text-xs bold">{it.v}</span>
+                  </div>
+                  <div className="progress-bar">
+                    <div className="progress-fill" style={{width:`${cases.length?Math.round(it.v/cases.length*100):0}%`,background:it.c}}></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// CASE FORM MODAL
+// ══════════════════════════════════════════
+function CaseModal({init, onClose}) {
+  const isEdit=!!init?.id;
+  const [f,setF]=useState({
+    title:init?.title||'',applicantName:init?.applicantName||'',
+    location:init?.location||'',category:init?.category||'مالي',
+    urgencyLevel:init?.urgencyLevel||'عادي',amountRequired:init?.amountRequired||init?.targetAmount||'',
+    description:init?.description||init?.story||'',status:init?.status||'pending',
+    imageUrls:init?.imageUrls||init?.imageUrl?[init.imageUrl]:[]
+  });
+  const [saving,setSaving]=useState(false);
+  const [files,setFiles]=useState([]);
+  const [previews,setPreviews]=useState([]);
+  const up=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  
+  const upFile=e=>{
+    const newFiles=Array.from(e.target.files);
+    setFiles(p=>[...p,...newFiles]);
+    newFiles.forEach(f=>{
+      const r=new FileReader();
+      r.onload=ev=>setPreviews(p=>[...p,{url:ev.target.result,name:f.name}]);
+      r.readAsDataURL(f);
+    });
+  };
+  
+  const removeImage=(idx)=>{
+    setF(p=>({...p,imageUrls:p.imageUrls.filter((_,i)=>i!==idx)}));
+  };
+  
+  const removePreview=(idx)=>{
+    setFiles(p=>p.filter((_,i)=>i!==idx));
+    setPreviews(p=>p.filter((_,i)=>i!==idx));
+  };
+  
+  const save=async()=>{
+    if(!f.title.trim()||!f.applicantName.trim()){showToast('error','بيانات ناقصة','عنوان الحالة واسم مقدم الطلب مطلوبان');return}
+    setSaving(true);
+    try{
+      let urls=[...f.imageUrls];
+      
+      // ─── رفع الصور الجديدة إلى Supabase Storage ───
+      if (files.length > 0) {
+        // نحتاج إلى معرف الوثيقة مسبقاً لبناء المسار
+        const tmpId = isEdit ? init.id : doc(collection(db,'cases')).id;
+        const uploadedUrls = await uploadMultipleToSupabase(files, 'case_documents', tmpId);
+        urls = [...urls, ...uploadedUrls];
+      }
+      
+      const amt = parseFloat(f.amountRequired)||0;
+      
+      if(isEdit){
+        const data={
+          title:f.title, applicantName:f.applicantName,
+          location:f.location, category:f.category,
+          urgencyLevel:f.urgencyLevel,
+          amountRequired: amt,
+          targetAmount: amt,
+          description:f.description, status:f.status,
+          imageUrls: urls,
+          imageUrl: urls[0]||'',
+          documentUrl: urls[0]||'',
+          updatedAt:serverTimestamp()
+        };
+        await updateDoc(doc(db,'cases',init.id),data);
+        showToast('success','تم التعديل','تم تحديث بيانات الحالة وصورها في Supabase ✓');
+      } else {
+        const newDocRef = doc(collection(db,'cases'));
+        const newDocId = newDocRef.id;
+        const data={
+          id: newDocId,
+          caseId: newDocId,
+          beneficiaryId: auth.currentUser?.uid || '',
+          createdBy: auth.currentUser?.uid || '',
+          assignedVolunteerId: '',
+          volunteerReport: '',
+          title:f.title, applicantName:f.applicantName,
+          location:f.location, category:f.category,
+          urgencyLevel:f.urgencyLevel,
+          amountRequired: amt,
+          targetAmount: amt,
+          description:f.description, status:f.status,
+          imageUrls: urls,
+          imageUrl: urls[0]||'',
+          documentUrl: urls[0]||'',
+          raisedAmount: 0,
+          amountRaised: 0,
+          progress: 0,
+          createdAt:serverTimestamp(),
+          updatedAt:serverTimestamp()
+        };
+        await setDoc(newDocRef, data);
+        showToast('success','تمت الإضافة','تم تسجيل الحالة وصورها في Supabase ✓');
+      }
+      onClose();
+    }catch(e){showToast('error','خطأ في رفع الصور',e.message)}finally{setSaving(false)}
+  };
+
+  return (
+    <Modal title={isEdit?'تعديل الحالة':'إضافة حالة جديدة'} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
+      footer={<>
+        <button type="button" className="btn btn-outline" onClick={onClose}>إلغاء</button>
+        <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
+          {saving?<><div className="spinner-border spinner-border-sm me-1"></div>جارٍ الحفظ...</>:<><i className="bi bi-check-lg"></i>{isEdit?'حفظ التعديلات':'إضافة الحالة'}</>}
+        </button>
+      </>}>
+      <div className="row g-3">
+        <div className="col-12"><Field label="عنوان الحالة *"><input className="form-input" value={f.title} onChange={up('title')} placeholder="عنوان وصفي للحالة" /></Field></div>
+        <div className="col-md-6"><Field label="اسم مقدم الطلب *"><input className="form-input" value={f.applicantName} onChange={up('applicantName')} placeholder="الاسم الكامل" /></Field></div>
+        <div className="col-md-6"><Field label="الموقع"><input className="form-input" value={f.location} onChange={up('location')} placeholder="المدينة / المنطقة" /></Field></div>
+        <div className="col-md-4"><Field label="الفئة"><select className="form-input" value={f.category} onChange={up('category')}><option>مالي</option><option>عيني</option><option>طبي</option><option>صحة</option></select></Field></div>
+        <div className="col-md-4"><Field label="درجة الإلحاح"><select className="form-input" value={f.urgencyLevel} onChange={up('urgencyLevel')}><option>عادي</option><option>متوسط</option><option>عاجل</option></select></Field></div>
+        <div className="col-md-4"><Field label="المبلغ المطلوب"><input className="form-input" type="number" value={f.amountRequired} onChange={up('amountRequired')} placeholder="0" /></Field></div>
+        {isEdit&&<div className="col-md-6"><Field label="الحالة"><select className="form-input" value={f.status} onChange={up('status')}><option value="pending">معلق</option><option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="completed">مكتمل</option></select></Field></div>}
+        
+        <div className="col-12">
+          <Field label="صور الحالة (يمكن اختيار عدة صور)">
+            <input className="form-input" type="file" accept="image/*" multiple onChange={upFile} />
+            <small className="text-muted d-block mt-1">💡 يمكنك تحميل عدة صور لتأكيد الحالة</small>
+          </Field>
+        </div>
+        
+        {(f.imageUrls.length > 0 || previews.length > 0) && (
+          <div className="col-12">
+            <Field label={`الصور المرفقة (${f.imageUrls.length + previews.length})`}>
+              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(100px, 1fr))', gap:'10px'}}>
+                {f.imageUrls.map((url, idx) => (
+                  <div key={`old-${idx}`} style={{position:'relative', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)'}}>
+                    <img src={url} alt="صورة" style={{width:'100%', height:100, objectFit:'cover'}} />
+                    <button type="button" className="btn btn-sm btn-reject" onClick={() => removeImage(idx)} style={{position:'absolute', top:0, left:0, borderRadius:0, width:'100%', height:'100%', opacity:0, transition:'opacity 0.2s'}} onMouseEnter={e=>e.target.style.opacity=1} onMouseLeave={e=>e.target.style.opacity=0}>
+                      <i className="bi bi-trash3"></i>
+                    </button>
+                  </div>
+                ))}
+                {previews.map((prev, idx) => (
+                  <div key={`new-${idx}`} style={{position:'relative', borderRadius:8, overflow:'hidden', border:'2px dashed var(--primary-light)'}}>
+                    <img src={prev.url} alt="معاينة" style={{width:'100%', height:100, objectFit:'cover', opacity:0.8}} />
+                    <button type="button" className="btn btn-sm btn-reject" onClick={() => removePreview(idx)} style={{position:'absolute', top:0, left:0, borderRadius:0, width:'100%', height:'100%', opacity:0, transition:'opacity 0.2s'}} onMouseEnter={e=>e.target.style.opacity=1} onMouseLeave={e=>e.target.style.opacity=0}>
+                      <i className="bi bi-trash3"></i>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Field>
+          </div>
+        )}
+        
+        <div className="col-12"><Field label="وصف الحالة"><textarea className="form-input" rows={4} value={f.description} onChange={up('description')} placeholder="تفاصيل الحالة وقصة المستفيد..." style={{resize:'vertical'}} /></Field></div>
+      </div>
+    </Modal>
+  );
+}
+
+// ══════════════════════════════════════════
+// PENDING VIEW
+// ══════════════════════════════════════════
+function PendingView({cases, doApprove, doReject, doDelCase}) {
+  const [modal,setModal] = useState(null);
+  return (
+    <div>
+      {modal&&<CaseModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} />}
+      <div className="d-flex align-items-center justify-content-between mb-4">
+        <div className="d-flex align-items-center gap-3">
+          <div className="stat-icon" style={{background:'rgba(249,168,37,0.15)',color:'var(--gold)',width:40,height:40,borderRadius:12,fontSize:'1.1rem'}}><i className="bi bi-hourglass-split"></i></div>
+          <div>
+            <div className="bold" style={{fontSize:'.87rem'}}>الحالات المعلقة</div>
+            <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>{cases.length} حالة تنتظر المراجعة</div>
+          </div>
+        </div>
+        <button className="btn btn-primary" onClick={()=>setModal('new')}><i className="bi bi-plus-lg"></i>إضافة حالة</button>
+      </div>
+      {cases.length===0
+        ?<div className="card"><Empty icon="bi-check-all" title="لا توجد حالات معلقة" sub="تمت مراجعة جميع الحالات!" /></div>
+        :<div className="cases-grid">
+          {cases.map(c=>(
+            <div className={`case-card ${c.status}`} key={c.id}>
+              <div className="case-card-header">
+                <div className="d-flex align-items-center gap-2">
+                  <Av name={c.applicantName} size={32} />
+                  <div>
+                    <div className="bold" style={{fontSize:'.78rem'}}>{c.applicantName}</div>
+                    <div style={{fontSize:'.61rem',color:'var(--text-secondary)'}}>{c.location||c.city||'غير محدد'}</div>
+                  </div>
+                </div>
+                <span className={catBadge(c.category)}>{c.category}</span>
+              </div>
+              <h3 className="case-title">{c.title||'بدون عنوان'}</h3>
+              <div className="case-story">{c.description||c.story}</div>
+              {(c.imageUrls && c.imageUrls.length > 0) && (
+                <div className="mb-3">
+                  {c.imageUrls.length === 1 ? (
+                    <img src={c.imageUrls[0]} alt="الحالة" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
+                  ) : (
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:'8px'}}>
+                      {c.imageUrls.slice(0,4).map((img, i) => (
+                        <img key={i} src={img} alt="الحالة" style={{width:'100%', height:80, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
+                      ))}
+                      {c.imageUrls.length > 4 && (
+                        <div style={{gridColumn:'1 / -1', padding:'8px', background:'rgba(249,168,37,0.1)', borderRadius:'var(--radius-sm)', textAlign:'center', fontSize:'.75rem', color:'var(--gold)'}}>
+                          +{c.imageUrls.length - 4} صور إضافية
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {(!c.imageUrls || c.imageUrls.length === 0) && (c.imageUrl||c.documentUrl) && (
+                <div className="mb-3">
+                  {String(c.imageUrl||c.documentUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
+                    <img src={c.imageUrl||c.documentUrl} alt="المرفق" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
+                  ) : (
+                    <a href={c.imageUrl||c.documentUrl} target="_blank" className="btn btn-outline btn-sm w-100 justify-content-center" style={{padding:'6px'}}><i className="bi bi-file-earmark-text"></i> المستند المرفق</a>
+                  )}
+                </div>
+              )}
+              {c.amountRequired&&<div className="d-flex align-items-center gap-2 p-2 rounded-3 mb-3" style={{background:'rgba(249,168,37,0.06)',border:'1px solid rgba(249,168,37,0.12)'}}><i className="bi bi-cash-coin" style={{color:'var(--gold)'}}></i><span style={{fontSize:'.73rem',fontWeight:700,color:'var(--gold)'}}>{Number(c.amountRequired).toLocaleString('ar')} ج.س</span></div>}
+              <div className="case-actions">
+                <button className="btn btn-approve btn-sm flex-fill justify-content-center" onClick={()=>doApprove(c.id,c.title)}><i className="bi bi-check-lg"></i>موافقة</button>
+                <button className="btn btn-reject btn-sm flex-fill justify-content-center" onClick={()=>doReject(c.id,c.title)}><i className="bi bi-x-lg"></i>رفض</button>
+                <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(c)} title="تعديل"><i className="bi bi-pencil"></i></button>
+                <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelCase(c.id,c.title)} title="حذف"><i className="bi bi-trash3"></i></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      }
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// CASES VIEW
+// ══════════════════════════════════════════
+function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, doUpdateRaisedAmount, setAssignModal, openNewCase, setOpenNewCase}) {
+  const [q,setQ]=useState(''); const [st,setSt]=useState('all'); const [cat,setCat]=useState('all');
+  const [modal,setModal]=useState(null); const [detail,setDetail]=useState(null);
+  useEffect(() => {
+    if (openNewCase) {
+      setModal('new');
+      setOpenNewCase(false);
+    }
+  }, [openNewCase, setOpenNewCase]);
+  const filt=cases.filter(c=>{
+    const mq=!q||[c.applicantName,c.title,c.location,c.city].join(' ').toLowerCase().includes(q.toLowerCase());
+    return mq&&(st==='all'||c.status===st)&&(cat==='all'||c.category===cat);
+  });
+  const pct=c=>Math.round((c.raisedAmount||c.amountRaised||0)/(c.targetAmount||c.amountRequired||1)*100);
+  const getAssignedVol = (volId) => {
+    if(!volId) return null;
+    return users.find(u => u.id === volId || u.uid === volId);
+  };
+  return (
+    <div>
+      {modal&&<CaseModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} />}
+      {detail&&(
+        <Modal title="تفاصيل الحالة" icon="bi-journal-medical" onClose={()=>setDetail(null)}
+          footer={<><button className="btn btn-outline" onClick={()=>setDetail(null)}>إغلاق</button>{detail.status==='pending'&&<><button className="btn btn-reject" onClick={()=>{doReject(detail.id,detail.title);setDetail(null)}}><i className="bi bi-x-lg"></i>رفض</button><button className="btn btn-approve" onClick={()=>{doApprove(detail.id,detail.title);setDetail(null)}}><i className="bi bi-check-lg"></i>موافقة</button></>}</>}>
+          <div className="row g-3">
+            <div className="col-md-6"><div className="modal-label">مقدم الطلب</div><div className="bold">{detail.applicantName||'—'}</div></div>
+            <div className="col-md-6"><div className="modal-label">الموقع</div><div>{detail.location||detail.city||'—'}</div></div>
+            <div className="col-md-6"><div className="modal-label">الفئة</div><span className={catBadge(detail.category)}>{detail.category}</span></div>
+            <div className="col-md-6"><div className="modal-label">الحالة</div><span className={(STATUS[detail.status]||STATUS.pending).c}>{(STATUS[detail.status]||STATUS.pending).l}</span></div>
+            <div className="col-md-6"><div className="modal-label">المبلغ المطلوب</div><div className="bold" style={{color:'var(--gold)'}}>{Number(detail.targetAmount||detail.amountRequired||0).toLocaleString('ar')} ج.س</div></div>
+            <div className="col-md-6"><div className="modal-label">تم جمعه</div><div className="bold" style={{color:'var(--primary-light)'}}>{Number(detail.raisedAmount||detail.amountRaised||0).toLocaleString('ar')} ج.س</div></div>
+            <div className="col-12">
+              <div className="modal-label">التقدم ({pct(detail)}%)</div>
+              <div className="progress-bar" style={{height:12,marginTop:6,borderRadius:10,boxShadow:'inset 0 2px 4px rgba(0,0,0,0.2)'}}>
+                <div className="progress-fill" style={{width:`${Math.min(pct(detail), 100)}%`, background:'linear-gradient(90deg, #43A047, #66BB6A)', position:'relative', overflow:'hidden'}}>
+                  <div style={{position:'absolute', top:0, left:0, bottom:0, right:0, background:'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)', transform:'skewX(-20deg)', animation:'shimmer 2s infinite'}} />
+                </div>
+              </div>
+            </div>
+            <div className="col-12">
+              <div className="modal-label">المتطوع المعين</div>
+              <div className="form-input" style={{background:'rgba(255,255,255,0.03)'}}>
+                {getAssignedVol(detail.assignedVolunteerId) ? (
+                  <span>
+                    <i className="bi bi-person-check-fill me-1" style={{color:'var(--primary-light)'}}></i>
+                    {getAssignedVol(detail.assignedVolunteerId).name} ({getAssignedVol(detail.assignedVolunteerId).email})
+                  </span>
+                ) : 'لم يتم تعيين متطوع بعد'}
+              </div>
+            </div>
+            {(detail.volunteerReport || detail.volunteerNotes) && (
+              <div className="col-12">
+                <div className="modal-label">تقرير الملاحظات من المتطوع</div>
+                <div className="text-sm p-3 rounded" style={{background:'rgba(102,187,106,0.08)', border:'1px solid rgba(102,187,106,0.2)', color:'#66BB6A', lineHeight:1.6}}>
+                  <i className="bi bi-chat-left-text-fill me-2"></i>
+                  {detail.volunteerNotes || detail.volunteerReport}
+                </div>
+              </div>
+            )}
+            {detail.proofUrl && (
+              <div className="col-12">
+                <div className="modal-label">صورة الإثبات المرفقة من المتطوع</div>
+                <div style={{marginTop:8}}>
+                  <img src={detail.proofUrl} alt="إثبات التسليم" style={{maxWidth:'100%', maxHeight:'300px', objectFit:'cover', borderRadius:12, border:'2px solid #66BB6A', padding:2, cursor:'pointer', boxShadow:'0 4px 12px rgba(102,187,106,0.2)'}} onClick={() => window.open(detail.proofUrl, '_blank')} />
+                </div>
+              </div>
+            )}
+            {(detail.imageUrls && detail.imageUrls.length > 0) && (
+              <div className="col-12">
+                <div className="modal-label">الصور المرفقة ({detail.imageUrls.length})</div>
+                <div style={{marginTop:8}}>
+                  {detail.imageUrls.length === 1 ? (
+                    <img src={detail.imageUrls[0]} alt="صورة الحالة" style={{maxWidth:'100%', borderRadius:12, border:'1px solid var(--border)'}} />
+                  ) : (
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:'12px'}}>
+                      {detail.imageUrls.map((img, i) => (
+                        <img key={i} src={img} alt={`صورة الحالة ${i+1}`} style={{width:'100%', height:150, objectFit:'cover', borderRadius:8, border:'1px solid var(--border)', cursor:'pointer'}} onClick={() => window.open(img, '_blank')} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {(!detail.imageUrls || detail.imageUrls.length === 0) && (detail.imageUrl||detail.documentUrl) && (
+              <div className="col-12">
+                <div className="modal-label">المرفقات</div>
+                <div style={{marginTop:8}}>
+                  {String(detail.imageUrl||detail.documentUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
+                    <img src={detail.imageUrl||detail.documentUrl} alt="صورة الحالة" style={{maxWidth:'100%', borderRadius:12, border:'1px solid var(--border)'}} />
+                  ) : (
+                    <a href={detail.imageUrl||detail.documentUrl} target="_blank" className="btn btn-outline" style={{display:'inline-flex', width:'auto'}}><i className="bi bi-file-earmark-text"></i>عرض المستند</a>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="col-12"><div className="modal-label">التفاصيل وقصة المستفيد</div><div style={{fontSize:'.82rem',lineHeight:1.7,marginTop:4,padding:12,borderRadius:9,background:'var(--bg-input)',border:'1px solid var(--border)'}}>{detail.description||detail.story||'—'}</div></div>
+          </div>
+        </Modal>
+      )}
+      <div className="d-flex gap-2 mb-4 flex-wrap align-items-center justify-content-between">
+        <div className="d-flex gap-2 flex-wrap flex-fill">
+          <div className="search-wrap flex-fill" style={{maxWidth:280}}>
+            <i className="bi bi-search search-icon"></i>
+            <input className="search-input" type="text" placeholder="بحث..." value={q} onChange={e=>setQ(e.target.value)} />
+          </div>
+          <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={st} onChange={e=>setSt(e.target.value)}>
+            <option value="all">كل الحالات</option><option value="pending">معلق</option>
+            <option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="completed">مكتمل</option>
+          </select>
+          <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={cat} onChange={e=>setCat(e.target.value)}>
+            <option value="all">كل الفئات</option><option value="مالي">مالي</option><option value="عيني">عيني</option><option value="طبي">طبي</option>
+          </select>
+        </div>
+        <button
+          className="d-flex align-items-center"
+          onClick={()=>setModal('new')}
+          style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
+          onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
+          onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
+        ><i className="bi bi-plus-circle-fill"></i>إضافة حالة</button>
+      </div>
+      {filt.length===0
+        ?<div className="card"><Empty icon="bi-inbox" title="لا توجد نتائج" sub="جرّب تعديل معايير البحث" /></div>
+        :<div className="cases-grid">
+          {filt.map(c=>{
+            const sc=STATUS[c.status]||STATUS.pending;
+            const assignedVol = getAssignedVol(c.assignedVolunteerId);
+            return(
+              <div className={`case-card ${c.status}`} key={c.id}>
+                <div className="case-card-header">
+                  <div className="d-flex align-items-center gap-2">
+                    <div style={{width:7,height:7,borderRadius:'50%',background:sc.dot,boxShadow:`0 0 6px ${sc.dot}`}}></div>
+                    <span className={sc.c}>{sc.l}</span>
+                  </div>
+                  <span className={catBadge(c.category)}>{c.category}</span>
+                </div>
+                <h3 className="case-title">{c.title||'—'}</h3>
+                <div className="case-meta">
+                  <span className="case-meta-item"><i className="bi bi-person"></i>{c.applicantName}</span>
+                  <span className="case-meta-item"><i className="bi bi-geo-alt"></i>{c.location||c.city||'—'}</span>
+                </div>
+                <div className="case-story">{c.description||c.story}</div>
+                {assignedVol && (
+                  <div className="mb-2 text-xs" style={{color:'var(--primary-light)'}}>
+                    <i className="bi bi-person-check-fill me-1"></i>
+                    المتطوع المعين: {assignedVol.name}
+                  </div>
+                )}
+                {(c.imageUrls && c.imageUrls.length > 0) && !c.proofUrl && (
+                  <div className="mb-3">
+                    {c.imageUrls.length === 1 ? (
+                      <img src={c.imageUrls[0]} alt="الحالة" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
+                    ) : (
+                      <div style={{display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:'8px'}}>
+                        {c.imageUrls.slice(0,4).map((img, i) => (
+                          <img key={i} src={img} alt="الحالة" style={{width:'100%', height:80, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
+                        ))}
+                        {c.imageUrls.length > 4 && (
+                          <div style={{gridColumn:'1 / -1', padding:'8px', background:'rgba(249,168,37,0.1)', borderRadius:'var(--radius-sm)', textAlign:'center', fontSize:'.75rem', color:'var(--gold)'}}>
+                            +{c.imageUrls.length - 4} صور إضافية
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {(!c.imageUrls || c.imageUrls.length === 0) && (c.imageUrl||c.documentUrl) && !c.proofUrl && (
+                  <div className="mb-3">
+                    {String(c.imageUrl||c.documentUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
+                      <img src={c.imageUrl||c.documentUrl} alt="صورة المرفق" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
+                    ) : (
+                      <a href={c.imageUrl||c.documentUrl} target="_blank" className="btn btn-outline btn-sm w-100 justify-content-center" style={{padding:'6px'}}><i className="bi bi-file-earmark-text"></i> عرض المستند المرفق</a>
+                    )}
+                  </div>
+                )}
+                {c.proofUrl && (
+                  <div className="mb-3" style={{position:'relative'}}>
+                    <div style={{position:'absolute', top:8, right:8, background:'rgba(102,187,106,0.9)', color:'#fff', padding:'2px 8px', borderRadius:20, fontSize:11, fontWeight:700, zIndex:2}}><i className="bi bi-check2-circle me-1"></i>إثبات التسليم</div>
+                    <img src={c.proofUrl} alt="إثبات التسليم" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'2px solid #66BB6A', cursor:'pointer'}} onClick={()=>window.open(c.proofUrl, '_blank')} />
+                  </div>
+                )}
+                {(c.targetAmount||c.amountRequired)&&<>
+                  <div className="case-progress-section">
+                    <div className="case-progress-label">
+                      <span>
+                        تم جمعه: <b style={{color:'var(--primary-light)'}}>{Number(c.raisedAmount||c.amountRaised||0).toLocaleString('ar')} ج.س</b>
+                        <button className="btn btn-ghost btn-icon p-0 ms-1" style={{minWidth:'auto',lineHeight:1}} onClick={()=>doUpdateRaisedAmount(c.id,c.title,c.raisedAmount||c.amountRaised||0)} title="تعديل المبلغ المجمع">
+                          <i className="bi bi-pencil-square" style={{color:'var(--primary-light)',fontSize:'0.8rem'}}></i>
+                        </button>
+                      </span>
+                      <span>الهدف: <b>{Number(c.targetAmount||c.amountRequired||0).toLocaleString('ar')} ج.س</b></span>
+                    </div>
+                    <div className="progress-bar"><div className="progress-fill" style={{width:`${Math.min(pct(c), 100)}%`}}></div></div>
+                  </div>
+                </>}
+                <div className="case-actions">
+                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setDetail(c)} title="تفاصيل"><i className="bi bi-eye"></i></button>
+                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(c)} title="تعديل"><i className="bi bi-pencil"></i></button>
+                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setAssignModal(c)} title="تعيين متطوع"><i className="bi bi-person-check"></i></button>
+                  {c.status==='pending'&&<><button className="btn btn-approve btn-icon btn-sm" onClick={()=>doApprove(c.id,c.title)} title="موافقة"><i className="bi bi-check-lg"></i></button><button className="btn btn-reject btn-icon btn-sm" onClick={()=>doReject(c.id,c.title)} title="رفض"><i className="bi bi-x-lg"></i></button></>}
+                  {c.status==='approved'&&<button className="btn btn-primary btn-icon btn-sm" onClick={()=>doComplete(c.id,c.title)} title="إتمام"><i className="bi bi-star"></i></button>}
+                  <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelCase(c.id,c.title)} title="حذف"><i className="bi bi-trash3"></i></button>
+                </div>
+              </div>
+            )})}
+        </div>
+      }
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// DONATION FORM MODAL
+// ══════════════════════════════════════════
+function DonationModal({init, cases, onClose}) {
+  const isEdit=!!init?.id;
+  const [f,setF]=useState({
+    donorName:init?.donorName||'', caseTitle:init?.caseTitle||'', caseId:init?.caseId||'',
+    amountOrItem:init?.amountOrItem||'', paymentMethod:init?.paymentMethod||'تحويل بنكي',
+    category:init?.category||'مالي', status:init?.status||'قيد الجمع', notes:init?.notes||'',
+  });
+  const [saving,setSaving]=useState(false);
+  const up=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+
+  const handleCaseChange = (e) => {
+    const selectedId = e.target.value;
+    if (selectedId === '') {
+      setF(p => ({...p, caseId: '', caseTitle: 'تبرع عام'}));
+    } else {
+      const selectedCase = cases.find(c => c.id === selectedId);
+      setF(p => ({...p, caseId: selectedId, caseTitle: selectedCase ? selectedCase.title : ''}));
+    }
+  };
+
+  const approvedCases = cases ? cases.filter(c => c.status === 'approved' || c.status === 'active') : [];
+  if (f.caseId && cases && !approvedCases.some(c => c.id === f.caseId)) {
+    const currentCase = cases.find(c => c.id === f.caseId);
+    if (currentCase) approvedCases.push(currentCase);
+  }
+
+  const save=async()=>{
+    if(!f.amountOrItem.trim()){showToast('error','بيانات ناقصة','المبلغ أو العطاء مطلوب');return}
+    setSaving(true);
+    try{
+      const data={...f,updatedAt:serverTimestamp()};
+      if(isEdit){await updateDoc(doc(db,'donations',init.id),data);showToast('success','تم التعديل','تم تحديث التبرع')}
+      else{await addDoc(collection(db,'donations'),{...data,createdAt:serverTimestamp()});showToast('success','تمت الإضافة','تم تسجيل التبرع')}
+      onClose();
+    }catch(e){showToast('error','خطأ',e.message)}finally{setSaving(false)}
+  };
+  return (
+    <Modal title={isEdit?'تعديل التبرع':'تسجيل تبرع جديد'} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
+      footer={<><button className="btn btn-outline" onClick={onClose}>إلغاء</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>جارٍ الحفظ...</>:<><i className="bi bi-check-lg"></i>{isEdit?'حفظ التعديلات':'تسجيل التبرع'}</>}</button></>}>
+      <div className="row g-3">
+        <div className="col-md-6"><Field label="اسم المتبرع"><input className="form-input" value={f.donorName} onChange={up('donorName')} placeholder="الاسم الكامل أو مجهول" /></Field></div>
+        <div className="col-md-6">
+          <Field label="الحالة المستفيدة">
+            <select className="form-input" value={f.caseId} onChange={handleCaseChange}>
+              <option value="">تبرع عام</option>
+              {approvedCases.map(c => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <div className="col-md-6"><Field label="المبلغ / العطاء *"><input className="form-input" value={f.amountOrItem} onChange={up('amountOrItem')} placeholder="مثال: 500 ج.س أو ملابس" /></Field></div>
+        <div className="col-md-6"><Field label="طريقة الدفع"><select className="form-input" value={f.paymentMethod} onChange={up('paymentMethod')}><option>تحويل بنكي</option><option>نقداً</option><option>بطاقة ائتمانية</option><option>عيني</option></select></Field></div>
+        <div className="col-md-6"><Field label="الفئة"><select className="form-input" value={f.category} onChange={up('category')}><option>مالي</option><option>عيني</option><option>طبي</option></select></Field></div>
+        <div className="col-md-6"><Field label="الحالة"><select className="form-input" value={f.status} onChange={up('status')}><option>قيد الجمع</option><option>تم الاستلام</option><option>تم التوزيع</option></select></Field></div>
+        <div className="col-12"><Field label="ملاحظات"><textarea className="form-input" rows={3} value={f.notes} onChange={up('notes')} placeholder="أي ملاحظات إضافية..." style={{resize:'vertical'}} /></Field></div>
+      </div>
+    </Modal>
+  );
+}
+
+// ══════════════════════════════════════════
+// DONATIONS VIEW
+// ══════════════════════════════════════════
+function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmReceived, doConfirmDistributed}) {
+  const [q,setQ]=useState(''); const [st,setSt]=useState('all');
+  const [modal,setModal]=useState(null);
+
+  const filtered=donations.filter(d=>{
+    const mq=!q||[d.donorName,d.caseTitle,d.amountOrItem,d.paymentMethod].join(' ').toLowerCase().includes(q.toLowerCase());
+    return mq&&(st==='all'||d.status===st);
+  });
+
+  const DON_STATUSES=['قيد الجمع','تم الاستلام','تم التوزيع','قيد المراجعة','مقبول (خصم تلقائي)','مرفوض'];
+
+  // Summary stats
+  const total    = donations.length;
+  const totalAmt = donations.reduce((s,d)=>s+(parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0),0);
+  const distrib  = donations.filter(d=>d.status==='تم التوزيع').length;
+  const pending  = donations.filter(d=>d.status==='قيد الجمع').length;
+
+  return (
+    <div>
+      {modal&&<DonationModal init={modal==='new'?null:modal} cases={cases} onClose={()=>setModal(null)} />}
+
+      {/* Mini stats */}
+      <div className="stats-grid">
+        {[
+          {l:'إجمالي التبرعات',v:total,     icon:'bi-heart-fill',    c:'stat-red'},
+          {l:'إجمالي المبالغ', v:`${totalAmt.toLocaleString('ar')} ج.س`,icon:'bi-cash-stack',c:'stat-green'},
+          {l:'تم التوزيع',     v:distrib,   icon:'bi-check-circle-fill',c:'stat-blue'},
+          {l:'قيد الجمع',      v:pending,   icon:'bi-hourglass-split',c:'stat-gold'},
+        ].map((s,i)=>(
+          <div className={`stat-card ${s.c}`} key={i}>
+            <div className="stat-icon"><i className={`bi ${s.icon}`}></i></div>
+            <div><div className="stat-value">{s.v}</div><div className="stat-label">{s.l}</div></div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters + Add */}
+      <div className="d-flex gap-2 mb-3 flex-wrap align-items-center justify-content-between">
+        <div className="d-flex gap-2 flex-wrap flex-fill">
+          <div className="search-wrap flex-fill" style={{maxWidth:300}}>
+            <i className="bi bi-search search-icon"></i>
+            <input className="search-input" type="text" placeholder="بحث في التبرعات..." value={q} onChange={e=>setQ(e.target.value)} />
+          </div>
+          <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={st} onChange={e=>setSt(e.target.value)}>
+            <option value="all">كل الحالات</option>
+            {DON_STATUSES.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+        <button
+          onClick={()=>setModal('new')}
+          style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
+          onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
+          onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
+        ><i className="bi bi-plus-circle-fill"></i>تسجيل تبرع</button>
+      </div>
+
+      <div className="card">
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>المتبرع</th>
+                <th>الحالة المستفيدة</th>
+                <th>المبلغ / العطاء</th>
+                <th>طريقة الدفع</th>
+                <th>الفئة</th>
+                <th>تاريخ التبرع</th>
+                <th>الحالة</th>
+                <th>إجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length===0
+                ?<tr><td colSpan={8}><Empty icon="bi-heart" title="لا توجد تبرعات" sub="ابدأ بتسجيل أول تبرع" /></td></tr>
+                :filtered.map(d=>{
+                  return(
+                    <tr key={d.id}>
+                      <td>
+                        <div className="d-flex align-items-center gap-2">
+                          {(() => {
+                            const dUser = users && users.find(u => (d.uid && u.uid === d.uid) || (d.donorId && u.uid === d.donorId) || (d.userId && u.uid === d.userId) || (d.email && u.email === d.email) || (d.donorName && u.name === d.donorName));
+                            const pUrl = d.photoURL || d.donorPhotoURL || (dUser ? dUser.photoURL : null);
+                            return pUrl 
+                              ? <img src={pUrl} alt={d.donorName||'مجهول'} style={{width:30,height:30,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} />
+                              : <Av name={d.donorName||'م'} size={30} />;
+                          })()}
+                          <span className="bold" style={{fontSize:'.77rem'}}>{d.donorName||'مجهول'}</span>
+                        </div>
+                      </td>
+                      <td style={{fontSize:'.74rem',color:'var(--text-secondary)',maxWidth:140,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{d.caseTitle||'تبرع عام'}</td>
+                      <td><span className="badge badge-approved" style={{fontVariantNumeric:'tabular-nums'}}>{d.amountOrItem||'—'}</span></td>
+                      <td style={{fontSize:'.72rem',color:'var(--text-secondary)'}}>
+                        <div>
+                          {d.paymentMethod||'—'}
+                          {d.isRecurring && <span className="badge mx-1" style={{background:'var(--brand-500)',color:'#fff',fontSize:'9px'}}>خصم دوري</span>}
+                        </div>
+                        {d.transactionId && <div style={{marginTop:4, color:'var(--brand-500)', fontWeight:600}}><i className="bi bi-hash"></i> {d.transactionId}</div>}
+                        {d.cardNumber && <div style={{marginTop:4, fontSize:'0.65rem'}}><i className="bi bi-credit-card"></i> المنتهية بـ {d.cardNumber}</div>}
+                        {d.receiptUrl && (
+                          <div style={{marginTop:4}}>
+                            {String(d.receiptUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
+                              <a href={d.receiptUrl} target="_blank" rel="noopener noreferrer" title="عرض الإيصال الكامل">
+                                <img src={d.receiptUrl} alt="إيصال" style={{width:52,height:40,objectFit:'cover',borderRadius:6,border:d.aiSuspicionFlag?'2px solid #ef4444':'1px solid var(--border)',cursor:'zoom-in',display:'block'}} />
+                              </a>
+                            ) : (
+                              <a href={d.receiptUrl} target="_blank" rel="noopener noreferrer" className="badge badge-completed text-decoration-none" style={{fontSize:'0.6rem',display:'inline-flex',alignItems:'center',gap:3}}>
+                                <i className="bi bi-receipt"></i>إيصال تحويل
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        {d.aiSuspicionFlag && (
+                          <div style={{fontSize:'0.65rem',color:'#ef4444',marginTop:6,background:'rgba(239,68,68,0.1)',padding:'4px 6px',borderRadius:4}}>
+                            <i className="bi bi-robot me-1"></i>
+                            تحليل ذكي: احتمال تباين في الإشعار أو البيانات
+                          </div>
+                        )}
+                        {d.donorMessage && <div style={{fontSize:'0.65rem',color:'var(--gold)',marginTop:4}}><i className="bi bi-chat-quote-fill me-1"></i>"{d.donorMessage}"</div>}
+                      </td>
+                      <td><span className={catBadge(d.category)}>{d.category||'—'}</span></td>
+                      <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>
+                        <div>مضاف: {d.createdAt?.toDate ? formatDate(d.createdAt) : (typeof d.createdAt === 'number' ? formatDate(d.createdAt) : '—')}</div>
+                        {d.receivedAt && <div style={{color:'var(--blue-light)'}}>استلم: {d.receivedAt?.toDate ? formatDate(d.receivedAt) : formatDate(d.receivedAt)}</div>}
+                        {d.distributedAt && <div style={{color:'var(--primary-light)'}}>وزّع: {d.distributedAt?.toDate ? formatDate(d.distributedAt) : formatDate(d.distributedAt)}</div>}
+                      </td>
+                      <td>
+                        <select className="form-input" style={{width:'auto',padding:'4px 10px',fontSize:'12px'}}
+                          value={d.status||'قيد الجمع'} onChange={e=>doDonStat(d.id,e.target.value)}>
+                          {DON_STATUSES.map(s=><option key={s}>{s}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <div className="d-flex gap-1">
+                          {d.status === 'قيد الجمع' && (
+                            <button className="btn btn-outline btn-icon btn-sm" style={{borderColor:'var(--primary-light)',color:'var(--primary-light)'}} onClick={()=>doConfirmReceived(d.id, d.donorName)} title="تأكيد الاستلام">
+                              <i className="bi bi-heart-fill"></i>
+                            </button>
+                          )}
+                          {d.status === 'تم الاستلام' && (
+                            <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doConfirmDistributed(d)} title="تأكيد التوزيع">
+                              <i className="bi bi-check-lg"></i>
+                            </button>
+                          )}
+                          {d.status === 'قيد المراجعة' && (
+                            <>
+                              <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مقبول (خصم تلقائي)')} title="موافقة (خصم)"><i className="bi bi-check-circle-fill"></i></button>
+                              <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مرفوض')} title="رفض الدفع"><i className="bi bi-x-circle-fill"></i></button>
+                            </>
+                          )}
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(d)} title="تعديل"><i className="bi bi-pencil"></i></button>
+                          <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelDon(d)} title="حذف"><i className="bi bi-trash3"></i></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// USER FORM MODAL
+// ══════════════════════════════════════════
+function UserModal({init, onClose}) {
+  const isEdit=!!init?.id;
+  const [f,setF]=useState({
+    name:init?.name||'',email:init?.email||'',
+    phone:init?.phone||'',role:init?.role||'member',
+    status:init?.status||'active',address:init?.address||'',
+  });
+  const [photoFile, setPhotoFile] = useState(null);
+  const [saving,setSaving]=useState(false);
+  const up=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const save=async()=>{
+    if(!f.name.trim()){showToast('error','بيانات ناقصة','الاسم مطلوب');return}
+    setSaving(true);
+    try{
+      const data={
+        ...f,
+        accountType: f.role,
+        updatedAt: serverTimestamp()
+      };
+      if (photoFile) {
+        const urls = await uploadMultipleToSupabase([photoFile], 'profile_images');
+        if (urls && urls.length > 0) {
+          data.photoURL = urls[0];
+        }
+      }
+      if(isEdit){await updateDoc(doc(db,'users',init.id),data);showToast('success','تم التعديل','تم تحديث بيانات المستخدم')}
+      else{await addDoc(collection(db,'users'),{...data,isActive:true,createdAt:serverTimestamp()});showToast('success','تمت الإضافة','تم تسجيل المستخدم')}
+      onClose();
+    }catch(e){showToast('error','خطأ',e.message)}finally{setSaving(false)}
+  };
+  return (
+    <Modal title={isEdit?'تعديل مستخدم':'إضافة مستخدم جديد'} icon={isEdit?'bi-pencil-fill':'bi-person-plus-fill'} onClose={onClose}
+      footer={<><button className="btn btn-outline" onClick={onClose}>إلغاء</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>جارٍ الحفظ...</>:<><i className="bi bi-check-lg"></i>{isEdit?'حفظ التعديلات':'إضافة المستخدم'}</>}</button></>}>
+      <div className="row g-3">
+        <div className="col-md-12">
+          <Field label="الصورة الشخصية">
+            {init?.photoURL && (
+              <div style={{marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12}}>
+                <img src={init.photoURL} alt="Current profile" style={{width: 50, height: 50, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border)'}} />
+                <span style={{fontSize: '.75rem', color: 'var(--text-secondary)'}}>الصورة الحالية</span>
+              </div>
+            )}
+            <input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} />
+            <div style={{fontSize:'.65rem',color:'var(--text-secondary)',marginTop:'4px'}}>اختر صورة جديدة لتحديث الصورة الحالية للمستخدم (اتركه فارغاً للاحتفاظ بالصورة الحالية)</div>
+          </Field>
+        </div>
+        <div className="col-md-6"><Field label="الاسم الكامل *"><input className="form-input" value={f.name} onChange={up('name')} placeholder="الاسم الكامل" /></Field></div>
+        <div className="col-md-6"><Field label="البريد الإلكتروني"><input className="form-input" type="email" value={f.email} onChange={up('email')} placeholder="example@email.com" /></Field></div>
+        <div className="col-md-6"><Field label="رقم الهاتف"><input className="form-input" type="tel" value={f.phone} onChange={up('phone')} placeholder="05xxxxxxxx" /></Field></div>
+        <div className="col-md-6"><Field label="نوع الحساب / الدور"><select className="form-input" value={f.role} onChange={up('role')} disabled={init?.role==='admin'}><option value="donor">متبرع (donor)</option><option value="beneficiary">مستفيد (beneficiary)</option><option value="volunteer">متطوع (volunteer)</option>{init?.role==='admin' && <option value="admin">مدير (admin)</option>}</select></Field></div>
+        <div className="col-md-6"><Field label="الحالة"><select className="form-input" value={f.status} onChange={up('status')}><option value="active">نشط</option><option value="suspended">موقوف</option></select></Field></div>
+        <div className="col-md-6"><Field label="العنوان"><input className="form-input" value={f.address} onChange={up('address')} placeholder="المدينة / المنطقة" /></Field></div>
+      </div>
+    </Modal>
+  );
+}
+
+// ══════════════════════════════════════════
+// USERS VIEW
+// ══════════════════════════════════════════
+function UsersView({users, doToggle, doDelUser, doChangeRole}) {
+  const [q,setQ]=useState(''); const [role,setRole]=useState('all');
+  const [modal,setModal]=useState(null);
+  const filt=users.filter(u=>{
+    const mq=!q||[u.name,u.email,u.phone].join(' ').toLowerCase().includes(q.toLowerCase());
+    return mq&&(role==='all'||u.role===role);
+  });
+  const ROLES={
+    admin:       {c:'badge badge-supervisor',i:'bi-shield-fill',       l:'مدير'},
+    donor:       {c:'badge badge-donor',     i:'bi-heart-fill',        l:'متبرع'},
+    beneficiary: {c:'badge badge-rejected',  i:'bi-person-hearts',     l:'مستفيد'},
+    volunteer:   {c:'badge badge-pending',   i:'bi-people-fill',       l:'متطوع'},
+  };
+  return (
+    <div className="page active">
+      {modal&&<UserModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} />}
+      <div className="d-flex gap-2 mb-4 flex-wrap align-items-center justify-content-between">
+        <div className="d-flex gap-2 flex-fill flex-wrap">
+          <div className="search-wrap flex-fill" style={{maxWidth:280}}>
+            <i className="bi bi-search search-icon"></i>
+            <input className="search-input" type="text" placeholder="بحث بالاسم أو البريد أو الهاتف..." value={q} onChange={e=>setQ(e.target.value)} />
+          </div>
+          <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={role} onChange={e=>setRole(e.target.value)}>
+            <option value="all">كل الأدوار</option>
+            <option value="admin">مدير</option>
+            <option value="donor">متبرع</option>
+            <option value="beneficiary">مستفيد</option>
+            <option value="volunteer">متطوع</option>
+          </select>
+        </div>
+        <button
+          onClick={()=>setModal('new')}
+          style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
+          onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
+          onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
+        ><i className="bi bi-person-plus-fill"></i>إضافة مستخدم</button>
+      </div>
+      <div className="card">
+        <div className="table-wrapper">
+          <table className="table">
+            <thead><tr><th>المستخدم</th><th>الدور</th><th>الهاتف</th><th>الحالة</th><th>منذ</th><th>إجراءات</th></tr></thead>
+            <tbody>
+              {filt.length===0
+                ?<tr><td colSpan={6}><Empty icon="bi-people" title="لا توجد نتائج" /></td></tr>
+                :filt.map(u=>{
+                  const userRole = u.role || u.accountType || 'member';
+                  const rc=ROLES[userRole]||{c:'badge badge-pending',i:'bi-person',l:'مستخدم'};
+                  const active=u.status!=='suspended'&&u.isActive!==false;
+                  return(
+                    <tr key={u.id}>
+                      <td>
+                        <div className="d-flex align-items-center gap-2">
+                          {u.photoURL
+                            ? <img
+                                src={u.photoURL}
+                                alt={u.name}
+                                style={{width:36,height:36,borderRadius:8,objectFit:'cover',opacity:active?1:.5,border:'1.5px solid var(--border)',cursor:'pointer'}}
+                                onClick={()=>window.open(u.photoURL,'_blank')}
+                                title="عرض الصورة"
+                              />
+                            : <Av name={u.name} size={36} r={8} op={active?1:.5} />
+                          }
+                          <div>
+                            <div style={{fontSize:'.77rem',fontWeight:700}}>{u.name||'بدون اسم'}</div>
+                            <div style={{fontSize:'.63rem',color:'var(--text-secondary)'}}>{u.email}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        {userRole === 'admin' ? (
+                          <span className={rc.c} style={{padding:'6px 12px',fontSize:'12px',fontWeight:'bold',display:'inline-block'}}>{rc.l}</span>
+                        ) : (
+                          <select 
+                            className={rc.c} 
+                            style={{width:'auto',padding:'4px 20px 4px 10px',fontSize:'12px', border:'none', outline:'none', cursor:'pointer', fontWeight: 'bold'}}
+                            value={userRole} 
+                            onChange={(e) => doChangeRole(u.id, u.name, e.target.value)}
+                          >
+                            <option value="donor" style={{color:'#000'}}>متبرع</option>
+                            <option value="beneficiary" style={{color:'#000'}}>مستفيد</option>
+                            <option value="volunteer" style={{color:'#000'}}>متطوع</option>
+                          </select>
+                        )}
+                      </td>
+                      <td style={{fontSize:'.73rem',color:'var(--text-secondary)'}}>{u.phone||'—'}</td>
+                      <td>
+                        <span className={`badge ${active?'badge-active':'badge-suspended'}`}>
+                          <i className={`bi ${active?'bi-circle-fill':'bi-circle'}`} style={{fontSize:'.43rem'}}></i>
+                          {active?'نشط':'موقوف'}
+                        </span>
+                      </td>
+                      <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>{u.createdAt?.toDate?timeAgo(u.createdAt):'—'}</td>
+                      <td>
+                        <div className="d-flex gap-1">
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(u)} title="تعديل"><i className="bi bi-pencil"></i></button>
+                          <button className={`btn btn-icon btn-sm ${active?'btn-outline':'btn-approve'}`}
+                            onClick={()=>doToggle(u.id,active?'active':'suspended',u.name,userRole)} title={active?'تعليق':'تفعيل'} disabled={userRole==='admin'}>
+                            <i className={`bi ${active?'bi-lock-fill':'bi-unlock-fill'}`} style={{color:active?'#ef4444':''}}></i>
+                          </button>
+                          <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelUser(u.id,u.name,userRole)} title="حذف" disabled={userRole==='admin'}><i className="bi bi-trash3"></i></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// CHATS VIEW
+// ══════════════════════════════════════════
+function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userInfo,users,doDelMsg,doEditMsg,doDelChat}) {
+  const endRef=useRef(null);
+  const [editingMsg, setEditingMsg] = useState(null);
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'})},[msgs]);
+  
+  // Find current chat name and user
+  const currentChat = chats.find(c => c.id === activeChatId);
+  const chatUser = currentChat ? users.find(u => u.uid === currentChat.userId) : null;
+  const ROLE_LABELS = { beneficiary: 'مستفيد', volunteer: 'متطوع', donor: 'متبرع' };
+  const roleLabel = chatUser ? (ROLE_LABELS[chatUser.role||chatUser.accountType] || 'مستخدم') : 'مستخدم';
+  const chatPhoto = chatUser?.photoURL || currentChat?.photoURL;
+
+  return (
+    <div className="page active">
+      <div className="card" style={{height:'calc(100dvh - 142px)',display:'flex',flexDirection:'row',overflow:'hidden'}}>
+        {/* Sidebar chat list */}
+        <div style={{width:300,minWidth:300,borderLeft:'1px solid var(--border)',overflowY:'auto',flexShrink:0,background:'rgba(255,255,255,0.01)'}}>
+          <div className="card-header" style={{borderBottom:'1px solid var(--border)',paddingBottom:11}}>
+            <div style={{fontSize:'.9rem',fontWeight:800}}>المحادثات</div>
+            <div style={{fontSize:'.7rem',color:'var(--text-secondary)'}}>{chats.length} محادثة</div>
+          </div>
+          {chats.length===0?<Empty icon="bi-chat-dots" title="لا توجد محادثات" />
+           :chats.map(ch=>{
+             const u = users.find(usr => usr.uid === ch.userId);
+             const pUrl = u?.photoURL || ch?.photoURL;
+             const rLabel = u ? (ROLE_LABELS[u.role||u.accountType] || 'مستخدم') : 'مستخدم';
+             const roleColor = rLabel === 'متطوع' ? 'var(--gold)' : rLabel === 'متبرع' ? 'var(--primary-light)' : 'var(--blue-light)';
+             return (
+               <div key={ch.id} style={{position:'relative',borderBottom:'1px solid var(--border)'}}>
+                 <button className={`nav-item ${activeChatId===ch.id?'active':''}`}
+                   style={{borderRadius:0,margin:0,width:'100%',borderLeft:'none',borderRight:'none',borderTop:'none',borderBottom:'none',padding:'12px 16px',textAlign:'right',background:activeChatId===ch.id?'rgba(46,125,50,0.15)':'transparent', paddingLeft:40}}
+                   onClick={()=>setChat(ch.id)}>
+                   {pUrl ? <img src={pUrl} alt="صورة" style={{width:34,height:34,borderRadius:'50%',objectFit:'cover',border:`2px solid ${roleColor}`}} /> : <Av name={ch.userName} size={34} />}
+                   <div style={{flex:1,minWidth:0,marginRight:10}}>
+                     <div style={{fontSize:'.8rem',fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',color:'var(--text-primary)'}}>
+                       {ch.userName||'مستخدم'}
+                       <span style={{fontSize:'10px', color:roleColor, marginRight:6, padding:'2px 6px', background:`${roleColor}22`, borderRadius:10}}>{rLabel}</span>
+                     </div>
+                     <div style={{fontSize:'.68rem',color:'var(--text-secondary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:4}}>{ch.lastMessage||'لا رسائل'}</div>
+                   </div>
+                   {ch.unreadCount>0&&<span className="nav-badge" style={{marginRight:'auto',marginLeft:0}}>{ch.unreadCount}</span>}
+                 </button>
+                 {/* Delete chat button */}
+                 <button
+                   title="حذف المحادثة"
+                   onClick={(e)=>{e.stopPropagation(); doDelChat(ch.id, ch.userName);}}
+                   style={{position:'absolute',top:'50%',left:8,transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',color:'var(--red,#ef4444)',fontSize:14,opacity:0.5,padding:'4px',borderRadius:4,transition:'opacity 0.2s'}}
+                   onMouseEnter={e=>e.currentTarget.style.opacity='1'}
+                   onMouseLeave={e=>e.currentTarget.style.opacity='0.5'}
+                 ><i className="bi bi-trash3"></i></button>
+               </div>
+             );
+           })}
+        </div>
+        
+        {/* Messaging window */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+          {!activeChatId
+            ?<div className="h-100 d-flex align-items-center justify-content-center"><Empty icon="bi-chat-square-dots" title="اختر محادثة" sub="من القائمة على اليمين للبدء بالدردشة" /></div>
+            :<>
+              <div className="card-header" style={{borderBottom:'1px solid var(--border)'}}>
+                <div className="d-flex align-items-center gap-2">
+                  {chatPhoto ? <img src={chatPhoto} alt="صورة" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} /> : <Av name={currentChat?.userName||'م'} size={32} />}
+                  <div style={{display:'flex', flexDirection:'column'}}>
+                    <span className="bold">{currentChat?.userName||'مستخدم'}</span>
+                    <span style={{fontSize:'11px', color:'var(--primary-light)'}}>{roleLabel}</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{flex:1,overflowY:'auto',padding:16,display:'flex',flexDirection:'column',gap:9}}>
+                {msgs.map(m=>{
+                  const isAdmin = m.sender==='admin';
+                  return (
+                    <div key={m.id} className={`d-flex gap-2 mb-2 align-items-end ${isAdmin?'justify-content-start':'justify-content-end'}`} style={{flexDirection: isAdmin?'row':'row-reverse'}}>
+                      {/* Avatar */}
+                      {m.senderPhotoUrl 
+                        ? <img src={m.senderPhotoUrl} alt="صورة" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} /> 
+                        : <Av name={isAdmin?userInfo.fullName:(m.senderName||currentChat?.userName||'م')} size={28} />
+                      }
+                      
+                      <div className="p-3" style={{
+                        maxWidth:'70%',
+                        background: isAdmin?'var(--primary-glow)':'var(--bg-glass)',
+                        border: isAdmin?'1px solid var(--primary-light)':'1px solid var(--border)',
+                        borderRadius: isAdmin?'14px 14px 0 14px':'14px 14px 14px 0',
+                        color:'var(--text-primary)',
+                        position:'relative'
+                      }}>
+                        <div style={{fontSize:'.62rem',fontWeight:700,color:'var(--text-muted)',marginBottom:3}}>{isAdmin?userInfo.fullName:(m.senderName||currentChat?.userName||'المستخدم')}</div>
+                        
+                        {editingMsg?.id === m.id ? (
+                          <div className="d-flex flex-column gap-2 mt-2">
+                            <input className="form-input" style={{fontSize:'.85rem', padding:'4px 8px'}} autoFocus value={editingMsg.text} onChange={e=>setEditingMsg({...editingMsg, text:e.target.value})} onKeyDown={e=>{if(e.key==='Enter') { doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null); }}} />
+                            <div className="d-flex gap-2 justify-content-end">
+                              <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>إلغاء</button>
+                              <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>حفظ</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{fontSize:'.85rem',lineHeight:1.5}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>(معدل)</span>}</div>
+                        )}
+                        
+                        {isAdmin && !editingMsg && (
+                          <div style={{position:'absolute', top:5, left: isAdmin?5:'auto', right: !isAdmin?5:'auto', display:'flex', gap:6, opacity:0.6}}>
+                            <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'var(--text-muted)',padding:0,cursor:'pointer',fontSize:'11px'}} title="تعديل"><i className="bi bi-pencil"></i></button>
+                            <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'var(--red)',padding:0,cursor:'pointer',fontSize:'11px'}} title="حذف"><i className="bi bi-trash"></i></button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={endRef}></div>
+              </div>
+              <form className="d-flex gap-2 p-3" style={{borderTop:'1px solid var(--border)',background:'rgba(255,255,255,0.01)'}} onSubmit={sendMsg}>
+                <input className="form-input flex-fill" type="text" placeholder="اكتب رسالة..." value={msgIn} onChange={e=>setMsgIn(e.target.value)} />
+                <button type="submit" className="btn btn-primary"><i className="bi bi-send-fill"></i><span className="d-none d-sm-inline ms-1">إرسال</span></button>
+              </form>
+            </>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// REPORTS VIEW (Chart.js financial charts)
+// ══════════════════════════════════════════
+function ReportsView({donations, cases, users}) {
+  const [dateRange, setDateRange] = useState('all'); // all, month, week
+  const barRef   = React.useRef(null);
+  const pieRef   = React.useRef(null);
+  const barChart = React.useRef(null);
+  const pieChart = React.useRef(null);
+
+  // Filter Data
+  const now = new Date();
+  const filteredDonations = React.useMemo(() => {
+    return donations.filter(d => {
+      if (dateRange === 'all') return true;
+      const ts = d.timestamp || d.createdAt;
+      if (!ts) return false;
+      const dDate = ts.toDate ? ts.toDate() : new Date(ts);
+      const diffTime = Math.abs(now - dDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+      if (dateRange === 'week') return diffDays <= 7;
+      if (dateRange === 'month') return diffDays <= 30;
+      if (dateRange === 'year') return diffDays <= 365;
+      return true;
+    });
+  }, [donations, dateRange]);
+
+  // Compute monthly totals for the chart (Always based on all data or year data for a good chart)
+  const monthlyData = React.useMemo(()=>{
+    const map={};
+    (dateRange==='all'?donations:filteredDonations).forEach(d=>{
+      const ts=d.timestamp||d.createdAt;
+      if(!ts)return;
+      const date=ts.toDate?ts.toDate():new Date(ts);
+      const key=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+      const amt = parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0;
+      map[key]=(map[key]||0)+amt;
+    });
+    const sorted=Object.entries(map).sort(([a],[b])=>a.localeCompare(b)).slice(-12); // last 12 months
+    return{labels:sorted.map(([k])=>k),data:sorted.map(([,v])=>v)};
+  },[donations, filteredDonations, dateRange]);
+
+  const catData = React.useMemo(()=>{
+    const map={};
+    filteredDonations.forEach(d=>{
+      const k=d.category||'مالي';
+      const amt = parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0;
+      map[k]=(map[k]||0)+amt;
+    });
+    return{labels:Object.keys(map),data:Object.values(map)};
+  },[filteredDonations]);
+
+  React.useEffect(()=>{
+    if(!barRef.current)return;
+    if(barChart.current)barChart.current.destroy();
+    const isDark=document.documentElement.getAttribute('data-bs-theme')==='dark';
+    const gridColor=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)';
+    const textColor=isDark?'#6c7a9a':'#64748b';
+    const ctx = barRef.current.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+    gradient.addColorStop(0, 'rgba(16,185,129,0.9)');
+    gradient.addColorStop(1, 'rgba(16,185,129,0.1)');
+
+    barChart.current=new Chart(barRef.current,{
+      type:'bar',
+      data:{labels:monthlyData.labels,datasets:[{label:'إجمالي التبرعات (ج.س)',data:monthlyData.data,
+        backgroundColor:gradient,borderColor:'#10b981',borderWidth:1,borderRadius:6,
+        borderSkipped:false, barPercentage:0.6}]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false},tooltip:{rtl:true,backgroundColor:'rgba(15,23,42,0.9)',titleFont:{family:'Tajawal'},bodyFont:{family:'Tajawal'},padding:12,
+        callbacks:{label:ctx=>`${ctx.parsed.y.toLocaleString('ar')} ج.س`}}},
+        scales:{x:{ticks:{color:textColor,font:{family:'Tajawal'}},grid:{display:false}},
+                y:{ticks:{color:textColor,font:{family:'Tajawal'},callback:v=>`${Number(v).toLocaleString('ar')}`},grid:{color:gridColor, borderDash:[5,5]}}}}
+    });
+    return()=>barChart.current?.destroy();
+  },[monthlyData]);
+
+  React.useEffect(()=>{
+    if(!pieRef.current)return;
+    if(pieChart.current)pieChart.current.destroy();
+    pieChart.current=new Chart(pieRef.current,{
+      type:'doughnut',
+      data:{labels:catData.labels.length?catData.labels:['لا بيانات'],datasets:[{data:catData.data.length?catData.data:[1],
+        backgroundColor:catData.data.length?['#10b981','#f59e0b','#8b5cf6','#ef4444','#3b82f6']:['rgba(100,100,100,0.2)'],
+        borderColor:document.documentElement.getAttribute('data-bs-theme')==='dark'?'#1e293b':'#ffffff',borderWidth:2}]},
+      options:{responsive:true, maintainAspectRatio:false, cutout:'70%',
+        plugins:{legend:{position:'bottom',labels:{color:'#6c7a9a',padding:20,usePointStyle:true,font:{family:'Tajawal',size:12}}},
+          tooltip:{rtl:true,backgroundColor:'rgba(15,23,42,0.9)',titleFont:{family:'Tajawal'},bodyFont:{family:'Tajawal'},padding:12,callbacks:{label:ctx=>catData.data.length?`${ctx.label}: ${ctx.parsed.toLocaleString('ar')} ج.س`:'لا توجد بيانات'}}}}
+    });
+    return()=>pieChart.current?.destroy();
+  },[catData]);
+
+  // Insights Calculations
+  const totalAmt = filteredDonations.reduce((s,d)=>s+(parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,''))||0),0);
+  const recurring = filteredDonations.filter(d=>d.isRecurring).length;
+  const topDonors = filteredDonations.reduce((acc,d)=>{
+    const n = d.donorName||'مجهول';
+    const dUser = users && users.find(u => (d.uid && u.uid === d.uid) || (d.donorId && u.uid === d.donorId) || (d.userId && u.uid === d.userId) || (d.email && u.email === d.email) || (d.donorName && u.name === d.donorName));
+    const pUrl = d.photoURL || d.donorPhotoURL || (dUser ? dUser.photoURL : null);
+    if (!acc[n]) acc[n] = { amt: 0, photoURL: pUrl };
+    if (!acc[n].photoURL && pUrl) acc[n].photoURL = pUrl;
+    acc[n].amt += (parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,''))||0);
+    return acc;
+  },{});
+  const topDonorsList = Object.entries(topDonors).sort(([,a],[,b])=>b.amt-a.amt).slice(0,5);
+  
+  // Smart Analysis
+  const highestMonth = monthlyData.data.length ? monthlyData.labels[monthlyData.data.indexOf(Math.max(...monthlyData.data))] : '—';
+  const highestCat = catData.data.length ? catData.labels[catData.data.indexOf(Math.max(...catData.data))] : '—';
+  const avgDonation = filteredDonations.length ? (totalAmt / filteredDonations.length) : 0;
+  
+  const targetTotal = cases.reduce((s,c)=>s+(parseFloat(String(c.targetAmount||c.amountRequired||'0').replace(/[^0-9.]/g,''))||0),0);
+  const raisedTotal = cases.reduce((s,c)=>s+(parseFloat(String(c.raisedAmount||c.amountRaised||'0').replace(/[^0-9.]/g,''))||0),0);
+  const globalProgress = targetTotal > 0 ? (raisedTotal / targetTotal) * 100 : 0;
+
+  // Export Functions
+  const exportDonationsExcel = () => {
+    if(!filteredDonations.length) { showToast('error', 'تنبيه', 'لا توجد بيانات للتصدير'); return; }
+    const ws_data = filteredDonations.map(d => {
+      const ts = d.timestamp || d.createdAt;
+      const dDate = ts?.toDate ? ts.toDate() : new Date(ts);
+      return {
+        'رقم التبرع': d.id,
+        'اسم المتبرع': d.donorName || 'مجهول',
+        'قيمة التبرع': parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0,
+        'نوع التبرع': d.category || 'مالي',
+        'الحالة': d.status || 'معلق',
+        'التاريخ': dDate.toLocaleDateString('ar-SA'),
+        'وقت التبرع': dDate.toLocaleTimeString('ar-SA'),
+        'طريقة الدفع': d.paymentMethod || '—',
+        'عنوان الحالة المرتبطة': d.caseTitle || '—',
+        'رقم المرجع': d.referenceNumber || '—'
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(ws_data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "التبرعات");
+    XLSX.writeFile(wb, `Donations_Report_${dateRange}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const exportCasesExcel = () => {
+    if(!cases.length) { showToast('error', 'تنبيه', 'لا توجد بيانات للتصدير'); return; }
+    const ws_data = cases.map(c => {
+      const ts = c.createdAt;
+      const cDate = ts?.toDate ? ts.toDate() : new Date(ts);
+      return {
+        'رقم الحالة': c.id,
+        'عنوان الحالة': c.title || '—',
+        'مقدم الطلب': c.applicantName || '—',
+        'المبلغ المطلوب': parseFloat(String(c.amountRequired||c.targetAmount||'0').replace(/[^0-9.]/g,'')) || 0,
+        'المبلغ المُجمّع': parseFloat(String(c.amountRaised||c.raisedAmount||'0').replace(/[^0-9.]/g,'')) || 0,
+        'التصنيف': c.category || '—',
+        'الحالة': c.status === 'pending' ? 'معلق' : c.status === 'approved' ? 'معتمد' : c.status === 'rejected' ? 'مرفوض' : 'مكتمل',
+        'المدينة': c.location || '—',
+        'الأولوية': c.urgencyLevel || 'عادي',
+        'تاريخ الإضافة': cDate.toLocaleDateString('ar-SA')
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(ws_data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "الحالات");
+    XLSX.writeFile(wb, `Cases_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  return(
+    <div className="page active pb-5" style={{animation:'fadeIn 0.5s ease-out'}}>
+      <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mb-4 p-3 rounded-4" style={{background:'linear-gradient(90deg, var(--bg-card) 0%, transparent 100%)', borderRight:'4px solid var(--primary)'}}>
+        <div>
+          <div className="bold d-flex align-items-center gap-2" style={{fontSize:'1.3rem'}}>
+            <div style={{width:35, height:35, borderRadius:'10px', background:'linear-gradient(135deg, var(--primary), var(--primary-light))', display:'flex', alignItems:'center', justifyContent:'center', color:'white', boxShadow:'0 4px 15px rgba(16,185,129,0.3)'}}>
+              <i className="bi bi-bar-chart-fill"></i>
+            </div>
+            التقارير والتحليلات المالية
+          </div>
+          <div style={{fontSize:'.85rem',color:'var(--text-secondary)', marginTop:4}}>لوحة ذكية لتحليل الأداء المالي والتبرعات واستخراج التقارير</div>
+        </div>
+        <div className="d-flex flex-wrap gap-3 align-items-center">
+          <div className="btn-group" dir="ltr" style={{boxShadow:'0 4px 15px rgba(0,0,0,0.08)', borderRadius:'8px', overflow:'hidden'}}>
+            {[{v:'all',l:'الكل'},{v:'year',l:'سنة'},{v:'month',l:'30 يوم'},{v:'week',l:'7 أيام'}].map(opt=>(
+              <button key={opt.v} className={`btn btn-sm px-3 py-2 ${dateRange===opt.v?'btn-primary':'btn-light'}`} style={{fontWeight:dateRange===opt.v?'bold':'normal', transition:'all 0.3s'}} onClick={()=>setDateRange(opt.v)}>{opt.l}</button>
+            ))}
+          </div>
+          <div className="d-flex gap-2">
+            <button className="btn btn-sm text-white px-3 py-2 d-flex align-items-center gap-2" style={{background:'linear-gradient(135deg, #10b981, #059669)', borderRadius:'8px', border:'none', boxShadow:'0 4px 12px rgba(16,185,129,0.3)', transition:'all 0.3s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 6px 15px rgba(16,185,129,0.4)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(16,185,129,0.3)'}} onClick={exportDonationsExcel} title="تصدير التبرعات بصيغة Excel">
+              <i className="bi bi-file-earmark-excel-fill fs-6"></i> تقرير التبرعات
+            </button>
+            <button className="btn btn-sm text-white px-3 py-2 d-flex align-items-center gap-2" style={{background:'linear-gradient(135deg, #3b82f6, #2563eb)', borderRadius:'8px', border:'none', boxShadow:'0 4px 12px rgba(59,130,246,0.3)', transition:'all 0.3s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 6px 15px rgba(59,130,246,0.4)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(59,130,246,0.3)'}} onClick={exportCasesExcel} title="تصدير الحالات بصيغة Excel">
+              <i className="bi bi-file-earmark-spreadsheet-fill fs-6"></i> تقرير الحالات
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Performance Indicators Banner */}
+      <div className="mb-4 p-4 rounded-4 position-relative overflow-hidden" style={{background:'linear-gradient(135deg, rgba(16,185,129,0.03), rgba(59,130,246,0.03))', border:'1px solid rgba(16,185,129,0.15)', boxShadow:'0 10px 30px rgba(0,0,0,0.02)'}}>
+        <div style={{position:'absolute', top:'-50%', right:'-10%', width:'300px', height:'300px', background:'radial-gradient(circle, rgba(16,185,129,0.08) 0%, transparent 70%)', borderRadius:'50%', zIndex:0}}></div>
+        <div style={{position:'absolute', bottom:'-50%', left:'-10%', width:'300px', height:'300px', background:'radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)', borderRadius:'50%', zIndex:0}}></div>
+        
+        <div style={{position:'relative', zIndex:1}}>
+          <div className="d-flex align-items-center gap-2 mb-4">
+            <div style={{background:'linear-gradient(135deg, #10b981, #059669)', color:'white', width:36, height:36, borderRadius:'10px', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(16,185,129,0.3)'}}>
+              <i className="bi bi-lightning-charge-fill fs-5"></i>
+            </div>
+            <span className="bold text-success fs-5" style={{textShadow:'0 2px 5px rgba(0,0,0,0.05)'}}>مؤشرات الأداء المالي</span>
+          </div>
+          <div className="row g-4">
+            <div className="col-md-4">
+              <div className="d-flex align-items-start gap-3 p-3 rounded-4" style={{background:'var(--bg-card)', border:'1px solid rgba(16,185,129,0.1)', transition:'all 0.3s', boxShadow:'0 4px 15px rgba(0,0,0,0.03)'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 25px rgba(16,185,129,0.1)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 15px rgba(0,0,0,0.03)'}}>
+                <div style={{background:'rgba(16,185,129,0.1)', color:'#10b981', width:44, height:44, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0}}>
+                  <i className="bi bi-cash-coin fs-4"></i>
+                </div>
+                <div>
+                  <div className="text-muted text-xs mb-1 fw-bold">كفاءة التبرعات</div>
+                  <div className="fw-bold" style={{fontSize:'.85rem'}}>متوسط التبرع: <span className="text-success">{avgDonation.toLocaleString('ar', {maximumFractionDigits:0})} ج.س</span></div>
+                </div>
+              </div>
+            </div>
+            <div className="col-md-4">
+              <div className="d-flex align-items-start gap-3 p-3 rounded-4" style={{background:'var(--bg-card)', border:'1px solid rgba(245,158,11,0.1)', transition:'all 0.3s', boxShadow:'0 4px 15px rgba(0,0,0,0.03)'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 25px rgba(245,158,11,0.1)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 15px rgba(0,0,0,0.03)'}}>
+                <div style={{background:'rgba(245,158,11,0.1)', color:'#f59e0b', width:44, height:44, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0}}>
+                  <i className="bi bi-star-fill fs-4"></i>
+                </div>
+                <div>
+                  <div className="text-muted text-xs mb-1 fw-bold">التوجه الخيري</div>
+                  <div className="fw-bold" style={{fontSize:'.85rem'}}>الفئة الأكثر تفضيلاً: <span className="text-warning">{highestCat}</span></div>
+                </div>
+              </div>
+            </div>
+            <div className="col-md-4">
+              <div className="d-flex align-items-start gap-3 p-3 rounded-4" style={{background:'var(--bg-card)', border:'1px solid rgba(59,130,246,0.1)', transition:'all 0.3s', boxShadow:'0 4px 15px rgba(0,0,0,0.03)'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 25px rgba(59,130,246,0.1)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 15px rgba(0,0,0,0.03)'}}>
+                <div style={{background:'rgba(59,130,246,0.1)', color:'#3b82f6', width:44, height:44, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0}}>
+                  <i className="bi bi-bar-chart-line-fill fs-4"></i>
+                </div>
+                <div>
+                  <div className="text-muted text-xs mb-1 fw-bold">مؤشر الإنجاز</div>
+                  <div className="fw-bold" style={{fontSize:'.85rem'}}>نسبة التغطية: <span className="text-primary">{globalProgress.toFixed(1)}%</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="stats-grid mb-4">
+        {[
+          {l:'إجمالي التبرعات (للفترة)',v:`${totalAmt.toLocaleString('ar')} ج.س`,icon:'bi-cash-stack',c:'stat-green'},
+          {l:'عدد العمليات',v:filteredDonations.length,icon:'bi-heart-fill',c:'stat-red'},
+          {l:'تبرعات دورية',v:recurring,icon:'bi-arrow-repeat',c:'stat-purple'},
+          {l:'متوسط التبرع',v:`${avgDonation.toLocaleString('ar', {maximumFractionDigits:0})} ج.س`,icon:'bi-calculator',c:'stat-blue'},
+        ].map((s,i)=>(
+          <div className={`stat-card ${s.c}`} key={i} style={{boxShadow:'0 10px 25px rgba(0,0,0,0.04)', border:'1px solid var(--border)', transition:'all 0.3s ease', cursor:'default'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-5px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+            <div className="stat-icon" style={{boxShadow:`0 4px 12px ${i===0?'rgba(16,185,129,0.3)':i===1?'rgba(239,68,68,0.3)':i===2?'rgba(139,92,246,0.3)':'rgba(59,130,246,0.3)'}`}}>
+              <i className={`bi ${s.icon}`}></i>
+            </div>
+            <div>
+              <div className="stat-value">{s.v}</div>
+              <div className="stat-label">{s.l}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="row g-4 mb-4">
+        {/* Monthly Bar Chart */}
+        <div className="col-xl-8">
+          <div className="card h-100" style={{border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.05)', borderRadius:'16px', overflow:'hidden', transition:'all 0.3s'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-4px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+            <div className="card-header border-0 pb-0 pt-4 px-4 bg-transparent d-flex justify-content-between align-items-center">
+              <div>
+                <div style={{fontWeight:800,fontSize:'1rem'}}>التدفق المالي الشهري</div>
+                <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>إجمالي التبرعات (آخر 12 شهر)</div>
+              </div>
+              <div style={{width:40,height:40,borderRadius:'50%',background:'rgba(16,185,129,0.1)',color:'#10b981',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="bi bi-bar-chart-steps"></i></div>
+            </div>
+            <div className="card-body" style={{padding:'20px'}}>
+              <div style={{position:'relative', height:'300px', width:'100%'}}>
+                <canvas ref={barRef}></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        {/* Category Doughnut */}
+        <div className="col-xl-4">
+          <div className="card h-100" style={{border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.05)', borderRadius:'16px', overflow:'hidden', transition:'all 0.3s'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-4px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+            <div className="card-header border-0 pb-0 pt-4 px-4 bg-transparent d-flex justify-content-between align-items-center">
+              <div>
+                <div style={{fontWeight:800,fontSize:'1rem'}}>التحليل الفئوي</div>
+                <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>التوزيع المالي حسب تصنيف الحالات</div>
+              </div>
+              <div style={{width:40,height:40,borderRadius:'50%',background:'rgba(245,158,11,0.1)',color:'#f59e0b',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="bi bi-pie-chart"></i></div>
+            </div>
+            <div className="card-body d-flex flex-column align-items-center justify-content-center" style={{padding:'20px'}}>
+              <div style={{position:'relative', height:'250px', width:'100%'}}>
+                <canvas ref={pieRef}></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Top donors */}
+      <div className="card" style={{border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.05)', borderRadius:'16px'}}>
+        <div className="card-header border-0 pb-3 pt-4 px-4 d-flex justify-content-between align-items-center bg-transparent">
+          <div>
+            <div style={{fontWeight:800,fontSize:'1.1rem'}}>سجل الشرف (أبرز المتبرعين)</div>
+            <div style={{fontSize:'.8rem',color:'var(--text-secondary)'}}>خلال الفترة المحددة ({dateRange==='all'?'الكل':dateRange==='year'?'سنة':dateRange==='month'?'30 يوم':'7 أيام'})</div>
+          </div>
+          <div style={{background:'rgba(245,158,11,0.1)', color:'#f59e0b', width:48, height:48, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center'}}>
+            <i className="bi bi-award-fill fs-4"></i>
+          </div>
+        </div>
+        <div className="card-body px-4 pb-4 pt-0">
+          {topDonorsList.length===0
+            ?<Empty icon="bi-heart" title="لا توجد بيانات متبرعين" sub="قم بتغيير نطاق التاريخ أو انتظار تسجيل تبرعات" />
+            :<div className="d-flex flex-column gap-3 mt-3">
+              {topDonorsList.map(([name, data],i)=>(
+                <div key={i} className="d-flex align-items-center justify-content-between p-3 rounded-4" style={{background:'var(--bg-input)', border:'1px solid var(--border)', transition:'all 0.3s ease', cursor:'default'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 20px rgba(0,0,0,0.08)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none'}}>
+                  <div className="d-flex align-items-center gap-3">
+                    <div style={{position:'relative'}}>
+                      {data.photoURL ? (
+                        <img src={data.photoURL} alt={name} style={{width:44,height:44,borderRadius:'50%',objectFit:'cover',border:'2px solid var(--primary-light)'}} />
+                      ) : (
+                        <Av name={name} size={44} />
+                      )}
+                      <div style={{position:'absolute', bottom:-5, right:-5, width:20,height:20,borderRadius:'50%',fontSize:'.7rem',fontWeight:'bold',display:'flex',alignItems:'center',justifyContent:'center', background: i===0?'linear-gradient(135deg, #F59E0B, #FBBF24)':i===1?'linear-gradient(135deg, #9CA3AF, #D1D5DB)':i===2?'linear-gradient(135deg, #B45309, #D97706)':'var(--bg-dark)', color:i<3?'#fff':'var(--text-primary)', boxShadow:'0 2px 5px rgba(0,0,0,0.2)', border:'2px solid var(--bg-input)'}}>{i+1}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:'.85rem',fontWeight:800}}>{name}</div>
+                      <div className="text-xs text-muted">متبرع مميز</div>
+                    </div>
+                  </div>
+                  <div className="text-end">
+                    <div style={{fontWeight:800, color:'var(--primary-light)', fontSize:'1rem'}}>{data.amt.toLocaleString('ar')} ج.س</div>
+                    <div className="text-xs text-muted">إجمالي المساهمات</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// SHARES VIEW
+// ══════════════════════════════════════════
+function SharesView({shares, cases}) {
+  const [q,setQ]=useState('');
+  const filt=shares.filter(s=>!q||[s.caseTitle,s.platform,s.userId].join(' ').toLowerCase().includes(q.toLowerCase()));
+
+  const platformStats=shares.reduce((acc,s)=>{acc[s.platform]=(acc[s.platform]||0)+1;return acc},{});
+  const PLATFORM_ICONS={'WhatsApp':'bi-whatsapp','Twitter/X':'bi-twitter-x','Facebook':'bi-facebook',
+    'تيليغرام':'bi-telegram','نسخ الرابط':'bi-link-45deg'};
+
+  return(
+    <div className="page active">
+      {/* Platform stats */}
+      <div className="stats-grid">
+        {Object.entries(platformStats).map(([p,c],i)=>(
+          <div className="stat-card stat-blue" key={i}>
+            <div className="stat-icon"><i className={`bi ${PLATFORM_ICONS[p]||'bi-share'}`}></i></div>
+            <div>
+              <div className="stat-value">{c}</div>
+              <div className="stat-label">{p}</div>
+            </div>
+          </div>
+        ))}
+        <div className="stat-card stat-red">
+          <div className="stat-icon"><i className="bi bi-share-fill"></i></div>
+          <div>
+            <div className="stat-value">{shares.length}</div>
+            <div className="stat-label">إجمالي المشاركات</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="d-flex gap-2 mb-3">
+        <div className="search-wrap flex-fill" style={{maxWidth:340}}>
+          <i className="bi bi-search search-icon"></i>
+          <input className="search-input" placeholder="بحث في المشاركات..." value={q} onChange={e=>setQ(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="table-wrapper">
+          <table className="table">
+            <thead><tr><th>الحملة</th><th>المنصة</th><th>المستخدم</th><th>الوقت</th></tr></thead>
+            <tbody>
+              {filt.length===0
+                ?<tr><td colSpan={4}><Empty icon="bi-share" title="لا توجد مشاركات بعد" sub="ستظهر هنا مشاركات الحملات من التطبيق" /></td></tr>
+                :filt.map(s=>(
+                  <tr key={s.id}>
+                    <td style={{fontWeight:600,fontSize:'.78rem'}}>{s.caseTitle||s.caseId||'—'}</td>
+                    <td>
+                      <span className="badge badge-pending" style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                        <i className={`bi ${PLATFORM_ICONS[s.platform]||'bi-share'}`}></i>{s.platform}
+                      </span>
+                    </td>
+                    <td style={{fontSize:'.71rem',color:'var(--text-secondary)'}}>{s.userId?.slice(0,8)}...</td>
+                    <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>
+                      {s.timestamp?new Date(s.timestamp).toLocaleDateString('ar-SA'):'—'}
+                    </td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// VOLUNTEER ASSIGNMENT MODAL
+// ══════════════════════════════════════════
+function AssignVolunteerModal({caseItem, users, onClose}) {
+  const volunteers = users.filter(u => u.role === 'volunteer' && u.status !== 'suspended');
+  const [selectedVolId, setSelectedVolId] = useState(caseItem.volunteerId || '');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, 'cases', caseItem.id), {
+        assignedVolunteerId: selectedVolId || null,
+        volunteerId: selectedVolId || null,
+        status: selectedVolId ? 'assigned' : (caseItem.status === 'assigned' ? 'approved' : caseItem.status),
+        assignedAt: selectedVolId ? serverTimestamp() : null,
+        updatedAt: serverTimestamp()
+      });
+      showToast('success', 'تم التعيين', 'تم تحديث المتطوع المعين للحالة');
+      onClose();
+    } catch(e) {
+      showToast('error', 'خطأ', e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="تعيين متطوع للحالة" icon="bi-person-check-fill" onClose={onClose}
+      footer={<>
+        <button className="btn btn-outline" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>
+          {saving ? 'جاري الحفظ...' : 'حفظ التعيين'}
+        </button>
+      </>}>
+      <div className="mb-3">
+        <label className="form-label">الحالة المستهدفة</label>
+        <div className="form-input" style={{background:'rgba(255,255,255,0.03)'}}>{caseItem.title}</div>
+      </div>
+      <div className="mb-3">
+        <label className="form-label">اختر متطوعاً</label>
+        <select className="form-input" value={selectedVolId} onChange={e => setSelectedVolId(e.target.value)}>
+          <option value="">-- إلغاء تعيين المتطوع --</option>
+          {volunteers.map(v => (
+            <option key={v.id} value={v.id || v.uid}>{v.name} ({v.email})</option>
+          ))}
+        </select>
+      </div>
+      {volunteers.length === 0 && (
+        <div style={{color:'var(--gold)', fontSize:'0.8rem', marginTop:'8px'}}>
+          <i className="bi bi-exclamation-triangle-fill me-1"></i>
+          لا يوجد متطوعين نشطين مسجلين في النظام حالياً.
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ══════════════════════════════════════════
+// VERIFICATIONS VIEW — Admin: Review identity docs
+// ══════════════════════════════════════════
+function VerificationsView({verifications, doDelVerification}) {
+  const [filter,setFilter] = useState('pending');
+  const [selected,setSelected] = useState(null);
+  const [adminNote,setAdminNote] = useState('');
+  const [saving,setSaving] = useState(false);
+
+  const DOC_LABELS = {
+    national_id: 'بطاقة وطنية',
+    passport: 'جواز سفر',
+    driving_license: 'رخصة قيادة',
+    birth_cert: 'شهادة ميلاد',
+  };
+  const ROLE_LABELS = { beneficiary: 'مستفيد', volunteer: 'متطوع' };
+
+  const filtered = verifications.filter(v => filter === 'all' || v.verificationStatus === filter);
+  const pendingCount = verifications.filter(v => v.verificationStatus === 'pending').length;
+
+  const doVerify = async (v, decision) => {
+    const label = decision === 'approved' ? 'قبول' : 'رفض';
+    if (!await showConfirm(`${label} الهوية`, `${label} طلب التحقق من هوية "${v.name}"؟`, decision === 'approved' ? '✅' : '❌')) return;
+    setSaving(true);
+    try {
+      // Update verification record
+      await updateDoc(doc(db, 'identity_verifications', v.id), {
+        verificationStatus: decision,
+        adminNote: adminNote,
+        reviewedAt: serverTimestamp(),
+      });
+      // Update user status
+      const newUserStatus = decision === 'approved' ? 'active' : 'rejected';
+      await updateDoc(doc(db, 'users', v.uid), {
+        status: newUserStatus,
+        verificationStatus: decision,
+      });
+      showToast('success', `تم ${label} طلب التحقق من هوية "${v.name}"`);
+      setSelected(null);
+      setAdminNote('');
+    } catch(e) { showToast('error', 'خطأ', e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div>
+      {/* Stats */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        {[
+          {l:'في الانتظار', v:verifications.filter(v=>v.verificationStatus==='pending').length, c:'stat-gold', i:'bi-hourglass-split'},
+          {l:'مقبولة',      v:verifications.filter(v=>v.verificationStatus==='approved').length, c:'stat-green', i:'bi-shield-check'},
+          {l:'مرفوضة',     v:verifications.filter(v=>v.verificationStatus==='rejected').length, c:'stat-red',  i:'bi-shield-x'},
+        ].map((s,i) => (
+          <div className={`stat-card ${s.c}`} key={i}>
+            <div className="stat-icon"><i className={`bi ${s.i}`}></i></div>
+            <div><div className="stat-value">{s.v}</div><div className="stat-label">{s.l}</div></div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter tabs */}
+      <div className="d-flex gap-2 mb-4 flex-wrap">
+        {[['all','الكل'],['pending','معلق'],['approved','مقبول'],['rejected','مرفوض']].map(([v,l])=>(
+          <button key={v} className={`btn btn-sm ${filter===v?'btn-primary':'btn-outline'}`} onClick={()=>setFilter(v)}>{l}</button>
+        ))}
+      </div>
+
+      {/* List */}
+      {filtered.length === 0
+        ? <div className="card"><Empty icon="bi-shield-check" title="لا توجد طلبات" sub="لا توجد طلبات تحقق بهذه الحالة" /></div>
+        : <div className="row g-3">
+            {filtered.map(v => {
+              const statusMap = {
+                pending:  {c:'badge-pending',  l:'معلق',   i:'bi-hourglass-split'},
+                approved: {c:'badge-approved', l:'مقبول',  i:'bi-check-circle-fill'},
+                rejected: {c:'badge-rejected', l:'مرفوض', i:'bi-x-circle-fill'},
+              };
+              const st = statusMap[v.verificationStatus] || statusMap.pending;
+              return (
+                <div className="col-lg-6" key={v.id}>
+                  <div className="card" style={{cursor:'pointer'}} onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}}>
+                    <div className="card-body">
+                      <div className="d-flex align-items-center gap-3 mb-3">
+                        {v.docFrontURL
+                          ? <img src={v.docFrontURL} alt="وثيقة" style={{width:48,height:48,borderRadius:10,objectFit:'cover',border:'1px solid var(--border)'}} />
+                          : <div className="avatar" style={{width:48,height:48,borderRadius:10}}>{ini(v.name)}</div>
+                        }
+                        <div style={{flex:1}}>
+                          <div className="bold">{v.name}</div>
+                          <div className="text-sm text-muted">{v.email}</div>
+                        </div>
+                        <div className="d-flex flex-column align-items-end gap-1">
+                          <span className={`badge badge-supervisor`}>{ROLE_LABELS[v.role]||v.role}</span>
+                          <span className={`badge ${st.c}`}><i className={`bi ${st.i}`} style={{fontSize:'.6rem'}}></i> {st.l}</span>
+                        </div>
+                      </div>
+                      <div className="d-flex gap-3 text-sm text-muted">
+                        <span><i className="bi bi-credit-card me-1"></i>{DOC_LABELS[v.docType]||v.docType}</span>
+                        <span><i className="bi bi-hash me-1"></i>{v.docNumber}</span>
+                        {v.docCountry && <span><i className="bi bi-geo-alt me-1"></i>{v.docCountry}</span>}
+                      </div>
+                      {v.reason && <div className="mt-2 text-sm" style={{color:'var(--text-secondary)',fontStyle:'italic'}}>"{v.reason}"</div>}
+                      <div className="d-flex align-items-center justify-content-between mt-3 pt-3" style={{borderTop:'1px solid var(--border)'}}>
+                        <div className="text-xs text-muted">{timeAgo(v.submittedAt)}</div>
+                        <div className="d-flex gap-2" onClick={e=>e.stopPropagation()}>
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}} title="معاينة وتعديل"><i className="bi bi-pencil"></i></button>
+                          <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelVerification(v.id, v.name)} title="حذف الطلب"><i className="bi bi-trash"></i></button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+      }
+
+      {/* Detail Modal */}
+      {selected && (
+        <Modal title="تفاصيل طلب التحقق" icon="bi-shield-check" onClose={()=>{setSelected(null);setAdminNote('');}}
+          footer={
+            <>
+              <button className="btn btn-outline" onClick={()=>{setSelected(null);setAdminNote('');}}>إغلاق</button>
+              <button className="btn btn-reject" onClick={()=>doVerify(selected,'rejected')} disabled={saving || selected.verificationStatus==='rejected'}><i className="bi bi-x-lg"></i>رفض الطلب</button>
+              <button className="btn btn-approve" onClick={()=>doVerify(selected,'approved')} disabled={saving || selected.verificationStatus==='approved'}><i className="bi bi-check-lg"></i>تأكيد وموافقة</button>
+              <button className="btn btn-outline" style={{color:'var(--red)',borderColor:'var(--red)'}} onClick={()=>{doDelVerification(selected.id, selected.name);setSelected(null);setAdminNote('');}}><i className="bi bi-trash"></i>حذف الطلب</button>
+            </>
+          }
+        >
+          <div className="row g-3">
+            <div className="col-md-6"><div className="modal-label">الاسم</div><div className="bold">{selected.name}</div></div>
+            <div className="col-md-6"><div className="modal-label">البريد</div><div>{selected.email}</div></div>
+            <div className="col-md-6"><div className="modal-label">الدور</div><span className="badge badge-supervisor">{ROLE_LABELS[selected.role]||selected.role}</span></div>
+            <div className="col-md-6"><div className="modal-label">نوع الوثيقة</div><div>{DOC_LABELS[selected.docType]||selected.docType}</div></div>
+            <div className="col-md-6"><div className="modal-label">رقم الوثيقة</div><div className="bold">{selected.docNumber}</div></div>
+            <div className="col-md-6"><div className="modal-label">البلد</div><div>{selected.docCountry||'—'}</div></div>
+            {selected.docExpiry && <div className="col-md-6"><div className="modal-label">تاريخ الانتهاء</div><div>{selected.docExpiry}</div></div>}
+            {selected.reason && <div className="col-12"><div className="modal-label">السبب / المهارات</div><div style={{lineHeight:1.7}}>{selected.reason}</div></div>}
+
+            {/* Document Images */}
+            {selected.docFrontURL && (
+              <div className="col-md-6">
+                <div className="modal-label">صورة الوجه الأمامي</div>
+                <a href={selected.docFrontURL} target="_blank" rel="noopener noreferrer">
+                  <img src={selected.docFrontURL} alt="الوجه الأمامي" style={{width:'100%',borderRadius:8,border:'1px solid var(--border)',marginTop:4,cursor:'zoom-in'}} />
+                </a>
+              </div>
+            )}
+            {selected.docBackURL && (
+              <div className="col-md-6">
+                <div className="modal-label">صورة الوجه الخلفي</div>
+                <a href={selected.docBackURL} target="_blank" rel="noopener noreferrer">
+                  <img src={selected.docBackURL} alt="الوجه الخلفي" style={{width:'100%',borderRadius:8,border:'1px solid var(--border)',marginTop:4,cursor:'zoom-in'}} />
+                </a>
+              </div>
+            )}
+
+            {selected.verificationStatus === 'pending' || true ? (
+              <div className="col-12">
+                <div className="modal-label">ملاحظة المدير / سبب القبول أو الرفض (اختياري)</div>
+                <textarea className="form-input" rows={2} value={adminNote} onChange={e=>setAdminNote(e.target.value)}
+                  placeholder="سبب القبول أو الرفض..." style={{resize:'vertical'}} />
+              </div>
+            ) : null}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// ACTIVITY VIEW
+// ══════════════════════════════════════════
+function ActivityView({logs, doDelLog, doClearLogs}) {
+  return (
+    <div>
+      <div className="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-3">
+        <div className="d-flex align-items-center gap-3">
+          <div className="stat-icon" style={{background:'rgba(102,187,106,0.15)',color:'var(--primary)',width:40,height:40,borderRadius:12,fontSize:'1.1rem'}}><i className="bi bi-clock-history"></i></div>
+          <div>
+            <div className="bold" style={{fontSize:'.87rem'}}>سجل العمليات</div>
+            <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>تتبع حركات ومسؤوليات النظام</div>
+          </div>
+        </div>
+        {logs.length > 0 && (
+          <button className="btn btn-outline" style={{borderColor:'rgba(239,83,80,0.5)',color:'var(--red)'}} onClick={doClearLogs}>
+            <i className="bi bi-trash-fill me-1"></i>مسح السجل بالكامل
+          </button>
+        )}
+      </div>
+      <div className="card p-0">
+        <div className="card-body p-0">
+          {logs.length===0 ? <Empty icon="bi-clock" title="لا توجد عمليات مسجلة" sub="لم يتم إجراء أي نشاطات بعد" /> : (
+            <div className="table-responsive">
+              <table className="table table-hover align-middle mb-0" style={{fontSize:'.8rem'}}>
+                <thead>
+                  <tr>
+                    <th>المسؤول</th>
+                    <th>العملية</th>
+                    <th>التفاصيل</th>
+                    <th>التاريخ والوقت</th>
+                    <th style={{width:60}}>إجراء</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map(log => (
+                    <tr key={log.id}>
+                      <td><div className="d-flex align-items-center gap-2"><Av name={log.adminName} size={24} />{log.adminName}</div></td>
+                      <td><span className="badge badge-approved">{log.action}</span></td>
+                      <td style={{maxWidth:250,whiteSpace:'normal'}}>{log.details}</td>
+                      <td className="text-muted" style={{minWidth:120}}>{log.timestamp ? formatDate(log.timestamp.toDate(),true) : '—'}</td>
+                      <td>
+                        <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelLog(log.id)} title="حذف السجل">
+                          <i className="bi bi-trash"></i>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// SETTINGS VIEW
+// ══════════════════════════════════════════
+function SettingsView({sysSettings, logActivity, cases, users, donations, activityLogs}) {
+  const [f,setF]=useState({
+    force_app_update: sysSettings?.force_app_update || false,
+    min_app_version: sysSettings?.min_app_version || '1.0.0',
+    app_maintenance_mode: sysSettings?.app_maintenance_mode || false,
+    play_store_link: sysSettings?.play_store_link || '',
+    
+    web_maintenance_mode: sysSettings?.web_maintenance_mode || false,
+    contact_email: sysSettings?.contact_email || '',
+    contact_phone: sysSettings?.contact_phone || '',
+    
+    facebook_url: sysSettings?.facebook_url || '',
+    twitter_url: sysSettings?.twitter_url || '',
+    instagram_url: sysSettings?.instagram_url || '',
+
+    bank_name: sysSettings?.bank_name || 'بنك الخرطوم',
+    bank_account: sysSettings?.bank_account || '',
+    bank_holder: sysSettings?.bank_holder || '',
+
+    about_us_text: sysSettings?.about_us_text || '',
+    privacy_policy_url: sysSettings?.privacy_policy_url || '',
+    terms_url: sysSettings?.terms_url || ''
+  });
+  const [saving,setSaving] = useState(false);
+
+  useEffect(()=>{
+    if(sysSettings) {
+      setF({
+        force_app_update: sysSettings.force_app_update || false,
+        min_app_version: sysSettings.min_app_version || '1.0.0',
+        app_maintenance_mode: sysSettings.app_maintenance_mode || false,
+        play_store_link: sysSettings.play_store_link || '',
+        
+        web_maintenance_mode: sysSettings.web_maintenance_mode || false,
+        contact_email: sysSettings.contact_email || '',
+        contact_phone: sysSettings.contact_phone || '',
+        
+        facebook_url: sysSettings.facebook_url || '',
+        twitter_url: sysSettings.twitter_url || '',
+        instagram_url: sysSettings.instagram_url || '',
+    
+        bank_name: sysSettings.bank_name || 'بنك الخرطوم',
+        bank_account: sysSettings.bank_account || '',
+        bank_holder: sysSettings.bank_holder || '',
+    
+        about_us_text: sysSettings.about_us_text || '',
+        privacy_policy_url: sysSettings.privacy_policy_url || '',
+        terms_url: sysSettings.terms_url || ''
+      });
+    }
+  },[sysSettings]);
+
+  const save = async()=>{
+    setSaving(true);
+    try {
+      await setDoc(doc(db,'settings','general'), f, {merge:true});
+      if(logActivity) logActivity('تحديث الإعدادات', 'تم تحديث إعدادات النظام العامة والموقع');
+      showToast('success','تم الحفظ','تم تحديث إعدادات النظام بنجاح');
+    }catch(e){showToast('error','خطأ',e.message)}finally{setSaving(false)}
+  };
+
+  const up = k => e => setF(p=>({...p, [k]: e.target.type==='checkbox'?e.target.checked:e.target.value}));
+
+  return (
+    <div>
+      <div className="d-flex align-items-center gap-3 mb-4">
+        <div className="stat-icon" style={{background:'rgba(239,83,80,0.15)',color:'var(--red)',width:40,height:40,borderRadius:12,fontSize:'1.1rem'}}><i className="bi bi-gear-fill"></i></div>
+        <div>
+          <div className="bold" style={{fontSize:'.87rem'}}>إعدادات النظام الشاملة</div>
+          <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>التحكم الكامل في إعدادات التطبيق والموقع وحسابات الجمعية</div>
+        </div>
+      </div>
+      
+      <div className="row g-4">
+        {/* التطبيق */}
+        <div className="col-md-6">
+          <div className="card h-100">
+            <div className="card-header"><div className="bold"><i className="bi bi-phone me-2 text-primary"></i>تطبيق الأندرويد</div></div>
+            <div className="card-body">
+              <div className="form-check form-switch mb-3">
+                <input className="form-check-input" type="checkbox" checked={f.app_maintenance_mode} onChange={up('app_maintenance_mode')} />
+                <label className="form-check-label bold text-danger">تفعيل وضع الصيانة (إيقاف التطبيق)</label>
+              </div>
+              <div className="form-check form-switch mb-3">
+                <input className="form-check-input" type="checkbox" checked={f.force_app_update} onChange={up('force_app_update')} />
+                <label className="form-check-label bold text-warning">إجبار المستخدمين على التحديث</label>
+              </div>
+              <div className="form-group mb-3">
+                <label className="form-label">رقم الإصدار الأدنى المقبول (مثل: 1.0.5)</label>
+                <input className="form-input" value={f.min_app_version} onChange={up('min_app_version')} placeholder="1.0.0" />
+              </div>
+              <div className="form-group mb-0">
+                <label className="form-label">رابط التطبيق على Google Play</label>
+                <input className="form-input" value={f.play_store_link} onChange={up('play_store_link')} placeholder="https://play.google.com/store/apps/details?id=..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* الموقع والتواصل */}
+        <div className="col-md-6">
+          <div className="card h-100">
+            <div className="card-header"><div className="bold"><i className="bi bi-globe me-2 text-primary"></i>الموقع الإلكتروني والمنصة</div></div>
+            <div className="card-body">
+              <div className="form-check form-switch mb-3">
+                <input className="form-check-input" type="checkbox" checked={f.web_maintenance_mode} onChange={up('web_maintenance_mode')} />
+                <label className="form-check-label bold text-danger">تفعيل وضع الصيانة للموقع</label>
+              </div>
+              <div className="form-group mb-3">
+                <label className="form-label">البريد الإلكتروني للتواصل</label>
+                <input className="form-input" type="email" value={f.contact_email} onChange={up('contact_email')} placeholder="info@takaful.com" dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="form-group mb-0">
+                <label className="form-label">رقم هاتف التواصل (واتساب)</label>
+                <input className="form-input" value={f.contact_phone} onChange={up('contact_phone')} placeholder="+249..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* وسائل التواصل الاجتماعي */}
+        <div className="col-md-6">
+          <div className="card h-100">
+            <div className="card-header"><div className="bold"><i className="bi bi-share me-2" style={{color:'#8b5cf6'}}></i>وسائل التواصل الاجتماعي</div></div>
+            <div className="card-body">
+              <div className="form-group mb-3">
+                <label className="form-label"><i className="bi bi-facebook me-1 text-primary"></i> رابط فيسبوك</label>
+                <input className="form-input" value={f.facebook_url} onChange={up('facebook_url')} placeholder="https://facebook.com/..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="form-group mb-3">
+                <label className="form-label"><i className="bi bi-twitter-x me-1"></i> رابط منصة X</label>
+                <input className="form-input" value={f.twitter_url} onChange={up('twitter_url')} placeholder="https://x.com/..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="form-group mb-0">
+                <label className="form-label"><i className="bi bi-instagram me-1" style={{color:'#e1306c'}}></i> رابط إنستغرام</label>
+                <input className="form-input" value={f.instagram_url} onChange={up('instagram_url')} placeholder="https://instagram.com/..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* الحسابات البنكية للتبرع */}
+        <div className="col-md-6">
+          <div className="card h-100">
+            <div className="card-header"><div className="bold"><i className="bi bi-bank me-2 text-success"></i>الحساب البنكي الرئيسي للتبرعات</div></div>
+            <div className="card-body">
+              <div className="form-group mb-3">
+                <label className="form-label">اسم البنك / المحفظة</label>
+                <input className="form-input" value={f.bank_name} onChange={up('bank_name')} placeholder="مثال: بنك الخرطوم (بنكك)" />
+              </div>
+              <div className="form-group mb-3">
+                <label className="form-label">رقم الحساب أو رقم المحفظة</label>
+                <input className="form-input" value={f.bank_account} onChange={up('bank_account')} placeholder="أدخل رقم الحساب هنا" dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="form-group mb-0">
+                <label className="form-label">اسم صاحب الحساب (المسجل)</label>
+                <input className="form-input" value={f.bank_holder} onChange={up('bank_holder')} placeholder="اسم المستفيد أو الجمعية" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* معلومات الجمعية والروابط */}
+        <div className="col-12">
+          <div className="card">
+            <div className="card-header"><div className="bold"><i className="bi bi-info-circle me-2 text-primary"></i>نبذة وروابط قانونية</div></div>
+            <div className="card-body row g-3">
+              <div className="col-md-12">
+                <label className="form-label">نبذة عن الجمعية (About Us)</label>
+                <textarea className="form-input" rows={4} value={f.about_us_text} onChange={up('about_us_text')} placeholder="أدخل النبذة التعريفية هنا لتظهر في التطبيق والموقع..."></textarea>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">رابط سياسة الخصوصية (Privacy Policy)</label>
+                <input className="form-input" value={f.privacy_policy_url} onChange={up('privacy_policy_url')} placeholder="https://..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">رابط الشروط والأحكام (Terms of Service)</label>
+                <input className="form-input" value={f.terms_url} onChange={up('terms_url')} placeholder="https://..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* النسخ الاحتياطي وتصدير البيانات */}
+        <div className="col-12">
+          <div className="card">
+            <div className="card-header"><div className="bold"><i className="bi bi-cloud-arrow-down me-2 text-primary"></i>النسخ الاحتياطي وتصدير البيانات</div></div>
+            <div className="card-body">
+              <p className="text-muted small mb-3">يمكنك أخذ نسخة احتياطية من جميع بيانات النظام (حالات، مستخدمين، تبرعات، سجلات) بصيغة JSON، أو تصدير بيانات المستخدمين بصيغة Excel.</p>
+              <div className="d-flex flex-wrap gap-2">
+                <button className="btn btn-outline-primary d-flex align-items-center gap-2" onClick={() => {
+                  const data = { cases: cases||[], users: users||[], donations: donations||[], activityLogs: activityLogs||[] };
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `Takaful_Backup_${new Date().toISOString().split('T')[0]}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  showToast('success', 'نجاح', 'تم تجهيز النسخة الاحتياطية بنجاح');
+                }}>
+                  <i className="bi bi-database-down"></i> أخذ نسخة احتياطية كاملة (JSON)
+                </button>
+                <button className="btn btn-outline-success d-flex align-items-center gap-2" onClick={() => {
+                  if(!users || !users.length) { showToast('error', 'تنبيه', 'لا توجد بيانات مستخدمين للتصدير'); return; }
+                  const ws_data = users.map(u => ({
+                    'رقم المستخدم': u.uid || u.id || '',
+                    'الاسم': u.name || '—',
+                    'البريد الإلكتروني': u.email || '—',
+                    'رقم الهاتف': u.phone || '—',
+                    'الدور': u.role === 'admin' ? 'مدير' : u.role === 'volunteer' ? 'متطوع' : u.role === 'donor' ? 'متبرع' : 'مستفيد',
+                    'تاريخ التسجيل': u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString('ar-SA') : '—'
+                  }));
+                  const ws = XLSX.utils.json_to_sheet(ws_data);
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, "المستخدمين");
+                  XLSX.writeFile(wb, `Users_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+                  showToast('success', 'نجاح', 'تم تصدير تقرير المستخدمين بنجاح');
+                }}>
+                  <i className="bi bi-file-earmark-person"></i> تصدير بيانات المستخدمين (Excel)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="col-12 text-end">
+          <button className="btn btn-primary px-4 py-2" onClick={save} disabled={saving} style={{fontSize:'1rem', borderRadius:'50px', boxShadow:'0 4px 15px rgba(16,185,129,0.3)'}}>
+            {saving?<div className="spinner-border spinner-border-sm"></div>:<><i className="bi bi-check-lg me-2"></i>حفظ جميع إعدادات النظام</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

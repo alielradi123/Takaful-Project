@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="تكافل — تصفح الحالات الإنسانية وتبرع لدعم المحتاجين">
+  <title>تكافل — بوابة المتبرعين</title>
+  <link rel="icon" type="image/webp" href="../app-icon.webp">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="donor-style.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "firebase-config": "../firebase-config.js",
+      "supabase-config": "../supabase-config.js",
+      "donor-auth": "./donor-auth.js",
+      "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18/jsx-dev-runtime"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+<div id="root">
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#07090f">
+    <div style="text-align:center">
+      <div class="spinner" style="width:2.5rem;height:2.5rem;margin:0 auto"></div>
+      <p style="margin-top:16px;color:rgba(255,255,255,0.5);font-family:Tajawal,sans-serif">تحميل بوابة المتبرعين...</p>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast-container"></div>
+
+<script type="text/babel" data-type="module">
+import { auth, db, storage } from 'firebase-config';
+import {
+  collection, query, where, orderBy, onSnapshot, limit,
+  doc, updateDoc, addDoc, getDoc, getDocs, serverTimestamp, Timestamp, deleteDoc
+} from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
+import { ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-storage.js';
+import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
+import { uploadMultipleToSupabase } from 'supabase-config';
+
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ─── HELPERS ───
+const ini = (n='') => (n||'م').trim().split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'م';
+const fmtNum = n => Number(n||0).toLocaleString('ar');
+const fmtDate = ts => {
+  if(!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
+  return new Intl.DateTimeFormat('ar',{year:'numeric',month:'short',day:'numeric'}).format(d);
+};
+const timeAgo = ts => {
+  if(!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
+  const s = Math.floor((Date.now()-d.getTime())/1000);
+  if(s<60) return 'الآن';
+  if(s<3600) return `منذ ${Math.floor(s/60)} دقيقة`;
+  if(s<86400) return `منذ ${Math.floor(s/3600)} ساعة`;
+  return `منذ ${Math.floor(s/86400)} يوم`;
+};
+
+// Toast
+function showToast(type, msg) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<i class="bi ${type==='success'?'bi-check-circle-fill':'bi-exclamation-circle-fill'}"></i><span>${msg}</span>`;
+  c.appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3000);
+}
+
+// Avatar — supports real photo
+const Av = ({name, photoURL, size=36, radius='50%'}) => (
+  photoURL
+    ? <img src={photoURL} alt={name} style={{width:size,height:size,borderRadius:radius,objectFit:'cover',flexShrink:0,border:'none', background:'#FFFFFF'}} />
+    : <div className="avatar" style={{width:size,height:size,fontSize:`${size*.38}px`}}>{ini(name)}</div>
+);
+
+// ═══════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════
+function App() {
+  const [page, setPage] = useState('home');
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState({name:'...',email:''});
+  const [cases, setCases] = useState([]);
+  const [donations, setDonations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [dark, setDark] = useState(() => {
+    // Highest priority: explicit mode keys
+    const mode = localStorage.getItem('takaful-theme-mode'); // optional: 'light'|'dark'|'auto'
+    if (mode === 'light') return false;
+    if (mode === 'dark') return true;
+
+    const saved = localStorage.getItem('tk-donor-theme'); // 'dark' | 'light' | null
+    if (saved === 'dark') return true;
+    if (saved === 'light') return false;
+
+    // Auto by time
+    const hour = new Date().getHours();
+    // 06:00 - 18:00 => light, otherwise dark
+    return !(hour >= 6 && hour < 18);
+  });
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [donateCase, setDonateCase] = useState(null);
+
+  // Chat state
+  const [chats, setChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [msgIn, setMsgIn] = useState('');
+
+  // Notifications state
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifMenu, setShowNotifMenu] = useState(false);
+  const unreadCount = notifications.filter(n => !n.isRead).length;
+
+  const markAllRead = async () => {
+    notifications.filter(n => !n.isRead).forEach(async n => {
+      try { await updateDoc(doc(db, 'notifications', n.id), { isRead: true }); } catch (e) {}
+    });
+  };
+  const markAsRead = async (id) => {
+    try { await updateDoc(doc(db, 'notifications', id), { isRead: true }); } catch (e) {}
+  };
+
+  useEffect(()=>{
+    document.documentElement.setAttribute('data-theme',dark?'dark':'light');
+    localStorage.setItem('tk-donor-theme',dark?'dark':'light');
+  },[dark]);
+
+  useEffect(()=>{
+    const unsub = requireDonorAuth(async u => {
+      setUser(u);
+      const p = await getDonorProfile(u.uid);
+      setProfile(p);
+      setLoading(false);
+    });
+    return ()=>unsub&&unsub();
+  },[]);
+
+  // ── Data listeners ──
+  useEffect(()=>{
+    if(loading||!user) return;
+    const subs = [
+      // Only approved cases
+      onSnapshot(query(collection(db,'cases'),where('status','in',['approved','active'])),s=>{
+        const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+        docs.sort((a,b)=>{
+          const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.timestamp?.toMillis ? a.timestamp.toMillis() : 0);
+          const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.timestamp?.toMillis ? b.timestamp.toMillis() : 0);
+          return tB - tA;
+        });
+        setCases(docs);
+      }),
+      // My donations
+      onSnapshot(query(collection(db,'donations'),where('userId','==',user.uid)),s=>{
+        const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+        docs.sort((a,b)=>{
+          const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.timestamp?.toMillis ? a.timestamp.toMillis() : 0);
+          const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.timestamp?.toMillis ? b.timestamp.toMillis() : 0);
+          return tB - tA;
+        });
+        setDonations(docs);
+      }),
+      // My chats — auto-create support chat if none exists (like Android)
+      onSnapshot(query(collection(db,'chats'),where('userId','==',user.uid)),async s=>{
+        if(s.empty) {
+          // Auto-create a support chat (matching Android behavior)
+          try {
+            const chatDoc = await addDoc(collection(db,'chats'),{
+              userId: user.uid,
+              userName: profile.name || 'مستخدم',
+              lastMessage: 'مرحباً بك في تكافل! كيف يمكننا مساعدتك؟',
+              lastMessageTime: serverTimestamp(),
+              createdAt: serverTimestamp()
+            });
+            await addDoc(collection(db,'chats',chatDoc.id,'messages'),{
+              sender: 'admin',
+              senderId: 'support',
+              senderName: 'الدعم والمحادثات',
+              text: 'مرحباً بك في تكافل! كيف يمكننا مساعدتك؟',
+              createdAt: serverTimestamp(),
+              isRead: false
+            });
+          } catch(e) { console.error('Error creating support chat:', e); }
+          return;
+        }
+        const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+        docs.sort((a,b)=>{
+          const tA = a.lastMessageTime?.toMillis ? a.lastMessageTime.toMillis() : 0;
+          const tB = b.lastMessageTime?.toMillis ? b.lastMessageTime.toMillis() : 0;
+          return tB - tA;
+        });
+        setChats(docs);
+        // Auto-select the first (latest) chat if none selected
+        setActiveChatId(prev => prev || docs[0]?.id || null);
+      }),
+      // My notifications
+      onSnapshot(query(collection(db,'notifications'),where('userId','==',user.uid)),s=>{
+        const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+        docs.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0));
+        setNotifications(docs);
+      }),
+    ];
+    return ()=>subs.forEach(u=>u&&u());
+  },[loading, user]);
+
+  // Chat messages
+  useEffect(()=>{
+    if(!activeChatId) return;
+    const u = onSnapshot(
+      query(collection(db,'chats',activeChatId,'messages'),orderBy('createdAt','asc')),
+      s => setMsgs(s.docs.map(d=>({id:d.id,...d.data()}))),
+      err => { console.error('Messages listener error:', err); setMsgs([]); }
+    );
+    return ()=>u();
+  },[activeChatId]);
+
+  const sendMsg = async (e) => {
+    e.preventDefault();
+    if(!msgIn.trim()) return;
+    const text = msgIn.trim();
+    setMsgIn('');
+    try {
+      // Build message data matching Android format
+      const messageData = {
+        text,
+        sender: 'user',
+        senderId: user.uid,
+        senderName: profile.name || 'مستخدم',
+        senderPhotoUrl: profile.photoURL || '',
+        createdAt: serverTimestamp(),
+        timestamp: Date.now(),
+        isRead: false
+      };
+
+      let chatId = activeChatId;
+      if(!chatId) {
+        // Create new chat
+        const chatDoc = await addDoc(collection(db,'chats'),{
+          userId: user.uid,
+          userName: profile.name || 'مستخدم',
+          lastMessage: text,
+          lastMessageTime: serverTimestamp(),
+          createdAt: serverTimestamp()
+        });
+        chatId = chatDoc.id;
+        await addDoc(collection(db,'chats',chatId,'messages'), messageData);
+        setActiveChatId(chatId);
+      } else {
+        await addDoc(collection(db,'chats',chatId,'messages'), messageData);
+        await updateDoc(doc(db,'chats',chatId),{ lastMessage: text, lastMessageTime: serverTimestamp() });
+      }
+    } catch(e) { showToast('error','خطأ: '+e.message); }
+  };
+
+  const doDelMsg = async (chatIdArg, msgId) => {
+    const cid = chatIdArg || activeChatId;
+    if(!cid || !msgId) return;
+    if(!confirm('حذف هذه الرسالة نهائياً؟'))return;
+    try {
+      await deleteDoc(doc(db,'chats',cid,'messages',msgId));
+      showToast('success','تم حذف الرسالة بنجاح');
+    } catch(e) { showToast('error', e.message); }
+  };
+  const doEditMsg = async (chatIdArg, msgId, newText) => {
+    const cid = chatIdArg || activeChatId;
+    if(!cid || !msgId || !newText || !newText.trim()) return;
+    try {
+      await updateDoc(doc(db,'chats',cid,'messages',msgId),{text:newText.trim(), updatedAt:serverTimestamp()});
+      showToast('success','تم تعديل الرسالة بنجاح');
+    } catch(e) { showToast('error', e.message); }
+  };
+
+  // Stats
+  const myTotalAmt = donations.reduce((s,d)=>{
+    const amt = d.amount || parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
+    return s + amt;
+  },0);
+  const casesHelped = new Set(donations.filter(d=>d.caseId).map(d=>d.caseId)).size;
+
+  // Greeting
+  const hour = new Date().getHours();
+  const greeting = hour>=5&&hour<12?'صباح الخير':hour>=12&&hour<18?'مساء الخير':'طابت مساؤك';
+
+  if(loading) return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg-body)'}}>
+      <div style={{textAlign:'center'}}>
+        <div className="spinner" style={{width:'2.5rem',height:'2.5rem',margin:'0 auto'}}></div>
+        <p style={{marginTop:16,color:'var(--text-muted)',fontFamily:'inherit'}}>جارٍ التحقق...</p>
+      </div>
+    </div>
+  );
+
+  const NAV = [
+    {id:'home',l:'الرئيسية',icon:'bi-house-fill'},
+    {id:'cases',l:'الحالات',icon:'bi-heart-fill'},
+    {id:'donations',l:'تبرعاتي',icon:'bi-gift-fill'},
+    {id:'chat',l:'الدعم',icon:'bi-chat-dots-fill'},
+    {id:'profile',l:'حسابي',icon:'bi-person-fill'},
+  ];
+
+  return (
+    <div className="app-layout">
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <img src="../app-icon.webp" alt="تكافل" />
+          </div>
+          <div className="sidebar-brand">
+            <h2>تـكـافـل</h2>
+            <p>بوابة المتبرعين</p>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {NAV.map(n=>(
+            <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>{setPage(n.id);setSelectedCase(null);setDonateCase(null)}} role="button">
+              <i className={`bi ${n.icon} nav-icon`}></i>
+              <span style={{flex:1}}>{n.l}</span>
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="user-card" style={{flexDirection:'column',gap:10,padding:'14px 16px',alignItems:'flex-start'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,width:'100%'}}>
+              <Av name={profile.name} photoURL={profile.photoURL} size={40} />
+              <div style={{flex:1,minWidth:0}}>
+                <div className="user-name truncate" style={{fontSize:13}}>{profile.name}</div>
+                <div className="user-role truncate" style={{fontSize:11}}>{profile.email}</div>
+              </div>
+            </div>
+            <button
+              onClick={logoutDonor}
+              style={{width:'100%',padding:'9px 14px',borderRadius:'var(--radius-sm)',background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.2)',color:'#F87171',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8,transition:'all 0.2s ease'}}
+              onMouseEnter={e=>{e.currentTarget.style.background='rgba(239,68,68,0.2)'}}
+              onMouseLeave={e=>{e.currentTarget.style.background='rgba(239,68,68,0.1)'}}
+            >
+              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <div className="main-content">
+        <header className="topbar">
+          <div style={{flex:1}}>
+            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || 'تكافل'}</div>
+          </div>
+          <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            {/* Notification pill */}
+            <div style={{position:'relative'}}>
+              <button
+                onClick={()=>setShowNotifMenu(!showNotifMenu)}
+                style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px',borderRadius:'50px',background:showNotifMenu?'var(--brand-500)':'var(--bg-glass)',border:'1px solid',borderColor:showNotifMenu?'var(--brand-500)':'var(--border)',color:showNotifMenu?'#fff':'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,transition:'all 0.2s ease',backdropFilter:'blur(10px)',whiteSpace:'nowrap'}}
+                onMouseEnter={e=>{if(!showNotifMenu){e.currentTarget.style.borderColor='var(--brand-500)';e.currentTarget.style.color='var(--brand-400)'}}}
+                onMouseLeave={e=>{if(!showNotifMenu){e.currentTarget.style.borderColor='var(--border)';e.currentTarget.style.color='var(--text-secondary)'}}}
+              >
+                <i className="bi bi-bell-fill" style={{fontSize:15}}></i>
+                {unreadCount > 0
+                  ? <span style={{background:'#EF4444',color:'#fff',fontSize:10,fontWeight:800,padding:'1px 6px',borderRadius:20,minWidth:18,textAlign:'center'}}>{unreadCount}</span>
+                  : <span style={{fontSize:12,opacity:.7}}>الإشعارات</span>
+                }
+              </button>
+              {showNotifMenu && (
+                <>
+                  <div style={{position:'fixed',top:0,left:0,width:'100%',height:'100%',zIndex:40}} onClick={()=>setShowNotifMenu(false)}></div>
+                  <div className="card" style={{position:'absolute',top:'120%',left:0,width:300,maxHeight:380,overflowY:'auto',zIndex:50,boxShadow:'0 20px 60px rgba(0,0,0,0.4)',padding:0,borderRadius:'var(--radius-lg)',border:'1px solid var(--border)'}}>
+                    <div style={{padding:'14px 16px',borderBottom:'1px solid var(--border)',fontWeight:800,display:'flex',justifyContent:'space-between',alignItems:'center',background:'linear-gradient(135deg,rgba(232,80,10,0.08),transparent)',borderRadius:'var(--radius-lg) var(--radius-lg) 0 0'}}>
+                      <span style={{display:'flex',alignItems:'center',gap:8}}><i className="bi bi-bell-fill" style={{color:'var(--brand-400)'}}></i>الإشعارات</span>
+                      {unreadCount > 0 && <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)'}} onClick={markAllRead}>تحديد كمقروء</button>}
+                    </div>
+                    {notifications.length === 0 ? (
+                      <div style={{padding:28,textAlign:'center',color:'var(--text-muted)'}}>
+                        <i className="bi bi-bell-slash" style={{fontSize:32,display:'block',marginBottom:10,opacity:.4}}></i>
+                        لا توجد إشعارات
+                      </div>
+                    ) : (
+                      notifications.map(n => (
+                        <div key={n.id} style={{padding:'12px 16px',borderBottom:'1px solid var(--border)',background:n.isRead?'transparent':'rgba(232,80,10,0.05)',cursor:'pointer',transition:'background 0.15s'}} onClick={()=>markAsRead(n.id)}>
+                          <div className="text-sm bold" style={{color:n.isRead?'var(--text-primary)':'var(--brand-400)'}}>{n.title}</div>
+                          <div className="text-xs" style={{marginTop:4,color:'var(--text-secondary)'}}>{n.message}</div>
+                          <div className="text-xs text-muted" style={{marginTop:4}}>{timeAgo(n.timestamp)}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Day/Night pill toggle */}
+            <button
+              onClick={()=>setDark(d=>!d)}
+              title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
+              style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(30,30,60,0.9)':'rgba(255,200,50,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.2)':'rgba(249,168,37,0.35)',cursor:'pointer',transition:'all 0.35s ease',backdropFilter:'blur(10px)',gap:2,position:'relative',minWidth:70}}
+            >
+              {/* Sun icon */}
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14,color:dark?'rgba(255,200,50,0.4)':'#fff',boxShadow:dark?'none':'0 2px 8px rgba(249,168,37,0.5)'}}>
+                ☀️
+              </span>
+              {/* Moon icon */}
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.8)':'transparent',transition:'all 0.35s ease',fontSize:14,color:dark?'#fff':'rgba(99,102,241,0.3)',boxShadow:dark?'0 2px 8px rgba(99,102,241,0.5)':'none'}}>
+                🌙
+              </span>
+            </button>
+          </div>
+        </header>
+        <main className="page-content">
+          {page==='home' && !selectedCase && !donateCase && <HomePage cases={cases} donations={donations} greeting={greeting} profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} onViewAll={()=>setPage('cases')} onViewDonations={()=>setPage('donations')} />}
+          {page==='cases' && !selectedCase && !donateCase && <CasesPage cases={cases} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} />}
+          {page==='detail' && selectedCase && !donateCase && <CaseDetailPage c={selectedCase} onBack={()=>{setSelectedCase(null);setPage('cases')}} onDonate={()=>{setDonateCase(selectedCase);setPage('donate')}} user={user} profile={profile} />}
+          {page==='donate' && donateCase && <DonationFormPage c={donateCase} cases={cases} user={user} profile={profile} onBack={()=>{setDonateCase(null);setPage(selectedCase?'detail':'cases')}} onSuccess={()=>{setDonateCase(null);setSelectedCase(null);setPage('donations')}} />}
+          {page==='donations' && <DonationsPage donations={donations} />}
+          {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} />}
+          {page==='profile' && <ProfilePage profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} dark={dark} setDark={setDark} user={user} setProfile={setProfile} />}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// SMART SLIDER
+// ═══════════════════════════════════════
+function SmartSlider({ cases, onCaseClick }) {
+  const { useState, useEffect } = React;
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    if (!cases || cases.length === 0) return;
+    const timer = setInterval(() => {
+      setCurrent(prev => (prev + 1) % cases.length);
+    }, 3500);
+    return () => clearInterval(timer);
+  }, [cases]);
+
+  if (!cases || cases.length === 0) return null;
+
+  const currentCase = cases[current];
+  const firstImg = (currentCase.imageUrls && currentCase.imageUrls.length > 0) ? currentCase.imageUrls[0] : currentCase.imageUrl;
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: 200, borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: 24, boxShadow: '0 8px 24px rgba(0,0,0,0.1)', cursor: 'pointer' }} onClick={() => onCaseClick(currentCase)}>
+      {firstImg ? (
+        <img src={firstImg} alt={currentCase.title} style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'all 0.5s ease' }} />
+      ) : (
+        <div style={{ width: '100%', height: '100%', background: 'var(--brand-100)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <i className="bi bi-heart-pulse-fill" style={{ fontSize: 48, color: 'var(--brand-500)' }}></i>
+        </div>
+      )}
+      
+      {/* Gradient Overlay */}
+      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: 20 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          {(currentCase.urgencyLevel === 'عاجل' || currentCase.urgencyLevel === 'urgent') && (
+            <span style={{ background: '#EF4444', color: '#fff', fontSize: 10, padding: '2px 8px', borderRadius: 12, fontWeight: 800 }}>عاجل</span>
+          )}
+          <span style={{ background: 'var(--brand-500)', color: '#fff', fontSize: 10, padding: '2px 8px', borderRadius: 12, fontWeight: 800 }}>{currentCase.category || 'عام'}</span>
+        </div>
+        <h3 style={{ color: '#fff', margin: 0, fontSize: 16, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCase.title}</h3>
+      </div>
+
+      {/* Dots */}
+      <div style={{ position: 'absolute', bottom: 10, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 6 }}>
+        {cases.map((_, i) => (
+          <div key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 6, background: i === current ? 'var(--brand-400)' : 'rgba(255,255,255,0.4)', transition: 'all 0.3s ease' }}></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// HOME PAGE
+// ═══════════════════════════════════════
+function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCaseClick,onViewAll,onViewDonations}) {
+  const recent = donations.slice(0,3);
+  const recommended = cases.slice(0,6);
+  const urgentCases = cases.filter(c=>c.urgencyLevel==='high'||c.urgencyLevel==='عاجل').slice(0,3);
+  const sliderCases = urgentCases.length > 0 ? urgentCases : recommended.slice(0, 4);
+  return (
+    <div>
+      {/* Hero */}
+      <div className="hero-header" style={{background:'linear-gradient(135deg,var(--brand-800),var(--brand-500),var(--gold-700))'}}>
+        <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:16}}>
+          <div style={{position:'relative'}}>
+            {profile.photoURL
+              ? <img src={profile.photoURL} alt={profile.name} style={{width:60,height:60,borderRadius:'50%',objectFit:'cover',border:'3px solid rgba(255,255,255,0.4)',boxShadow:'0 4px 16px rgba(0,0,0,0.3)', background:'#FFFFFF'}} />
+              : <div style={{width:60,height:60,borderRadius:'50%',background:'rgba(255,255,255,0.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,fontWeight:900,color:'#fff',border:'3px solid rgba(255,255,255,0.4)'}}>{ini(profile.name)}</div>
+            }
+            <div style={{position:'absolute',bottom:2,right:2,width:14,height:14,borderRadius:'50%',background:'#4ade80',border:'2px solid rgba(255,255,255,0.8)'}}></div>
+          </div>
+          <div>
+            <div className="hero-greeting" style={{fontSize:13}}>{greeting}،</div>
+            <div className="hero-name" style={{fontSize:22}}>{(profile.name||'').split(' ').slice(0,2).join(' ')||'متبرع'}</div>
+          </div>
+        </div>
+        <div className="hero-stats">
+          <div className="hero-stat" onClick={onViewDonations} style={{cursor:'pointer'}}>
+            <div className="hero-stat-label"><i className="bi bi-coin"></i> إجمالي تبرعاتي</div>
+            <div className="hero-stat-value">{fmtNum(myTotalAmt)} ج.س</div>
+          </div>
+          <div className="hero-stat">
+            <div className="hero-stat-label"><i className="bi bi-heart-fill"></i> حالات دعمتها</div>
+            <div className="hero-stat-value">{casesHelped} حالة</div>
+          </div>
+          <div className="hero-stat">
+            <div className="hero-stat-label"><i className="bi bi-file-earmark-check"></i> تبرعاتي</div>
+            <div className="hero-stat-value">{donations.length}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Smart Slider */}
+      {sliderCases.length > 0 && (
+        <SmartSlider cases={sliderCases} onCaseClick={onCaseClick} />
+      )}
+
+      {/* Urgent Cases Alert */}
+      {urgentCases.length > 0 && (
+        <div style={{background:'linear-gradient(135deg,rgba(239,68,68,0.12),rgba(239,68,68,0.06))',border:'1px solid rgba(239,68,68,0.25)',borderRadius:'var(--radius-lg)',padding:'16px 20px',marginBottom:24,display:'flex',alignItems:'center',gap:14}}>
+          <div style={{width:44,height:44,borderRadius:'50%',background:'rgba(239,68,68,0.15)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+            <i className="bi bi-exclamation-triangle-fill" style={{color:'#F87171',fontSize:20}}></i>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,fontSize:14,color:'#F87171',marginBottom:2}}>حالات عاجلة تحتاج مساعدتك!</div>
+            <div style={{fontSize:12,color:'var(--text-secondary)'}}>{urgentCases.length} حالة عاجلة متاحة الآن للتبرع</div>
+          </div>
+          <button className="btn btn-sm" style={{background:'#EF4444',color:'#fff',borderRadius:'var(--radius-sm)',padding:'8px 16px',whiteSpace:'nowrap'}} onClick={onViewAll}>
+            تبرع الآن
+          </button>
+        </div>
+      )}
+
+      {/* Recent Donations */}
+      {recent.length > 0 && (
+        <div>
+          <div className="section-header">
+            <div className="section-title"><div className="section-bar"></div>آخر تبرعاتي</div>
+            <div className="section-action" onClick={onViewDonations}>عرض الكل <i className="bi bi-chevron-left"></i></div>
+          </div>
+          <div className="card" style={{marginBottom:24}}>
+            {recent.map(d=>(
+              <div key={d.id} className="donation-item">
+                <div className="donation-icon"><i className="bi bi-heart-fill"></i></div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="bold truncate" style={{fontSize:14}}>{d.caseTitle||'تبرع عام'}</div>
+                  <div className="text-sm text-muted">{d.amountOrItem||`${fmtNum(d.amount)} ج.س`} • {fmtDate(d.createdAt)}</div>
+                </div>
+                <span className={`badge ${d.status==='تم التوزيع'?'badge-status-distributed':d.status==='تم الاستلام'?'badge-status-received':'badge-status-collecting'}`}>{d.status||'قيد الجمع'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty state when no donations */}
+      {donations.length === 0 && (
+        <div style={{background:'linear-gradient(135deg,rgba(232,80,10,0.08),rgba(249,168,37,0.05))',border:'1px solid rgba(232,80,10,0.15)',borderRadius:'var(--radius-xl)',padding:28,marginBottom:24,textAlign:'center'}}>
+          <i className="bi bi-gift" style={{fontSize:48,color:'var(--brand-400)',display:'block',marginBottom:12,opacity:.8}}></i>
+          <div style={{fontWeight:800,fontSize:16,marginBottom:6}}>ابدأ رحلة العطاء</div>
+          <div style={{color:'var(--text-secondary)',fontSize:13,marginBottom:16}}>تبرعك الأول يغير حياة إنسان — كن السبب في الخير</div>
+          <button className="btn btn-primary" style={{width:'auto',padding:'10px 28px'}} onClick={onViewAll}>
+            <i className="bi bi-heart-fill"></i> تصفح الحالات
+          </button>
+        </div>
+      )}
+
+      {/* Recommended Cases */}
+      <div className="section-header">
+        <div className="section-title"><div className="section-bar"></div>حالات مقترحة لك</div>
+        <div className="section-action" onClick={onViewAll}>عرض الكل <i className="bi bi-chevron-left"></i></div>
+      </div>
+      {recommended.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-heart"></i><h3>لا توجد حالات حالياً</h3><p>سنبلغك فور توفر حالات جديدة</p></div></div>
+      ) : (
+        <div className="cases-grid">
+          {recommended.map(c=><CaseCard key={c.id} c={c} onClick={()=>onCaseClick(c)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CASE CARD
+// ═══════════════════════════════════════
+function CaseCard({c, onClick}) {
+  const target = c.targetAmount||c.amountRequired||0;
+  const raised = c.raisedAmount||c.amountRaised||0;
+  const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
+  const firstImg = (c.imageUrls && c.imageUrls.length > 0) ? c.imageUrls[0] : c.imageUrl || c.documentUrl || '';
+
+  return (
+    <div className="case-card" onClick={onClick}>
+      <div className="case-card-image" style={{position:'relative'}}>
+        {firstImg ? <img src={firstImg} alt={c.title} /> : (
+          <div className="case-card-image-placeholder"><i className="bi bi-heart-pulse-fill"></i></div>
+        )}
+        <div className="case-card-overlay"></div>
+        <div className="case-card-badges">
+          <span className="badge badge-cat">{c.category||'عام'}</span>
+          {(c.urgencyLevel==='عاجل'||c.urgencyLevel==='urgent')&&<span className="badge badge-urgent">🔴 عاجل</span>}
+          {c.urgencyLevel==='متوسط'&&<span className="badge badge-medium">متوسط</span>}
+        </div>
+      </div>
+      <div className="case-card-body">
+        <div className="case-card-title">{c.title||'بدون عنوان'}</div>
+        <div className="case-card-desc">{c.description||c.story||'—'}</div>
+        {c.category==='مالي' && target > 0 && (
+          <div className="case-card-progress">
+            <div className="case-card-progress-labels">
+              <span className="text-brand bold">تم جمع: {fmtNum(raised)} ج.س</span>
+              <span className="text-muted">{pct}%</span>
+            </div>
+            <div className="progress-bar"><div className="progress-fill animated" style={{width:`${pct}%`}}></div></div>
+          </div>
+        )}
+        <button className="case-card-btn"><i className="bi bi-heart-fill"></i>تبرع الآن</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CASES PAGE
+// ═══════════════════════════════════════
+function CasesPage({cases, onCaseClick}) {
+  const [q, setQ] = useState('');
+  const [cat, setCat] = useState('الكل');
+  const cats = ['الكل','مالي','عيني','طبي'];
+  const filtered = cases.filter(c => {
+    const matchQ = !q || [c.title,c.description,c.story,c.location,c.applicantName].join(' ').toLowerCase().includes(q.toLowerCase());
+    return matchQ && (cat==='الكل' || c.category===cat);
+  });
+
+  return (
+    <div>
+      {/* Search & Filters */}
+      <div className="search-bar" style={{marginBottom:20}}>
+        <i className="bi bi-search"></i>
+        <input placeholder="ابحث عن حالة..." value={q} onChange={e=>setQ(e.target.value)} />
+        {q && <i className="bi bi-x-lg" style={{cursor:'pointer'}} onClick={()=>setQ('')}></i>}
+      </div>
+      <div style={{display:'flex',gap:8,marginBottom:24,flexWrap:'wrap'}}>
+        {cats.map(c=>(
+          <button key={c} className={`chip ${cat===c?'active':''}`} onClick={()=>setCat(c)}>
+            {c} ({c==='الكل'?cases.length:cases.filter(x=>x.category===c).length})
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-search"></i><h3>لا توجد حالات مطابقة</h3></div></div>
+      ) : (
+        <div className="cases-grid">
+          {filtered.map(c=><CaseCard key={c.id} c={c} onClick={()=>onCaseClick(c)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CASE DETAIL PAGE
+// ═══════════════════════════════════════
+function CaseDetailPage({c, onBack, onDonate, user, profile}) {
+  const target = c.targetAmount||c.amountRequired||0;
+  const raised = c.raisedAmount||c.amountRaised||0;
+  const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
+  const firstImg = (c.imageUrls && c.imageUrls.length > 0) ? c.imageUrls[0] : c.imageUrl||'';
+  const shareText = `ساهم في دعم حالة إنسانية: ${c.title}\nالمبلغ المطلوب: ${fmtNum(target)} ج.س\nالموقع: ${c.location||'غير محدد'}\n\n🌐 الموقع الإلكتروني:\nhttps://takaful.com\n\n📱 تطبيق الأندرويد:\nhttps://play.google.com/store/apps/details?id=com.takaful.app`;
+
+  const handleShare = async (platform) => {
+    // Record share in Firestore
+    try {
+      await addDoc(collection(db,'shares'),{
+        caseId: c.id, caseTitle: c.title, userId: user?.uid||'', platform, timestamp: serverTimestamp()
+      });
+    } catch(e) {}
+    
+    if(platform === 'نسخ الرابط') {
+      navigator.clipboard.writeText(shareText);
+      showToast('success','تم نسخ تفاصيل الحالة');
+    } else {
+      const url = platform === 'واتساب' ? `https://wa.me/?text=${encodeURIComponent(shareText)}` :
+                  platform === 'تويتر' ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}` : '';
+      if(url) window.open(url,'_blank');
+    }
+  };
+
+  return (
+    <div>
+      <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}><i className="bi bi-arrow-right"></i> رجوع</button>
+      
+      {/* Hero Image */}
+      {firstImg ? (
+        <div className="detail-hero"><img src={firstImg} alt={c.title} /></div>
+      ) : (
+        <div className="detail-hero-placeholder"><i className="bi bi-heart-pulse-fill"></i></div>
+      )}
+
+      {/* Info Card */}
+      <div className="detail-info-card">
+        <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:16}}>
+          <div style={{width:48,height:48,borderRadius:'50%',background:'rgba(16,185,129,0.15)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <i className={`bi ${c.category==='طبي'?'bi-hospital-fill':c.category==='عيني'?'bi-box-fill':'bi-coin'}`} style={{fontSize:22,color:'var(--brand-500)'}}></i>
+          </div>
+          <div>
+            <div style={{fontSize:18,fontWeight:800}}>{c.title}</div>
+            <div className="text-sm text-brand bold">{c.category} • {c.location||'غير محدد'}</div>
+          </div>
+        </div>
+        <div style={{borderTop:'1px solid var(--border)',paddingTop:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+            <span className="bold text-brand">تم جمع {fmtNum(raised)} ج.س</span>
+            <span className="text-muted">من {fmtNum(target)} ج.س</span>
+          </div>
+          <div className="progress-bar" style={{height:10,borderRadius:10}}>
+            <div className="progress-fill animated" style={{width:`${pct}%`,borderRadius:10}}></div>
+          </div>
+          <div style={{textAlign:'left',marginTop:6,fontSize:13,color:'var(--gold-500)',fontWeight:700}}>{pct}% مكتمل</div>
+        </div>
+      </div>
+
+      {/* Story */}
+      <div className="detail-info-card">
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>قصة الحالة</div>
+        <div style={{fontSize:14,lineHeight:1.8,color:'var(--text-secondary)'}}>{c.description||c.story||'لا يوجد وصف'}</div>
+      </div>
+
+      {/* Extra Images */}
+      {c.imageUrls && c.imageUrls.length > 1 && (
+        <div className="detail-info-card">
+          <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>صور الحالة ({c.imageUrls.length})</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10}}>
+            {c.imageUrls.map((img,i)=>(
+              <img key={i} src={img} alt={`صورة ${i+1}`} style={{width:'100%',height:120,objectFit:'cover',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)'}} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Details */}
+      <div className="detail-info-card">
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>معلومات إضافية</div>
+        <div className="detail-row"><span className="detail-row-label">الموقع</span><span className="detail-row-value">{c.location||'—'}</span></div>
+        <div className="detail-row"><span className="detail-row-label">التصنيف</span><span className="detail-row-value">{c.category||'—'}</span></div>
+        <div className="detail-row"><span className="detail-row-label">المبلغ المطلوب</span><span className="detail-row-value" style={{color:'var(--gold-500)'}}>{fmtNum(target)} ج.س</span></div>
+        <div className="detail-row"><span className="detail-row-label">المتبقي</span><span className="detail-row-value">{fmtNum(Math.max(0,target-raised))} ج.س</span></div>
+      </div>
+
+      {/* Share */}
+      <div className="detail-info-card">
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:4}}>شارك الحملة مع أصدقائك</div>
+        <div className="text-sm text-muted" style={{marginBottom:14}}>الدال على الخير كفاعله ♥</div>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('واتساب')} style={{flex:1}}><i className="bi bi-whatsapp" style={{color:'#25D366'}}></i>واتساب</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('تويتر')} style={{flex:1}}><i className="bi bi-twitter-x"></i>إكس</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('نسخ الرابط')} style={{flex:1}}><i className="bi bi-copy"></i>نسخ</button>
+        </div>
+      </div>
+
+      {/* Donate Button */}
+      <button className="btn btn-donate" style={{width:'100%',marginTop:8}} onClick={onDonate}>
+        <i className="bi bi-heart-fill"></i>تبرع الآن
+      </button>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// DONATION FORM PAGE
+// ═══════════════════════════════════════
+function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
+  const [donationType, setDonationType] = useState(c?.category || 'مالي');
+  const [amount, setAmount] = useState('');
+  const [amountOrItem, setAmountOrItem] = useState('');
+  const [payment, setPayment] = useState('');
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurringInterval, setRecurringInterval] = useState('monthly');
+  const [donorMessage, setDonorMessage] = useState('');
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [transactionId, setTransactionId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [selectedCaseId, setSelectedCaseId] = useState(c?.id || '');
+  const [selectedCaseTitle, setSelectedCaseTitle] = useState(c?.title || 'تبرع عام');
+
+  const payments = ['بنك الخرطوم (بنكك)', 'بنك النيل (صح)', 'بطاقة بنك الخرطوم (Visa/Mastercard)', 'بنكك | PAY (QR)'];
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
+  const [cvv, setCvv] = useState('');
+  const [cardHolder, setCardHolder] = useState('');
+
+  const handleDonate = async () => {
+    const amt = parseFloat(amount) || 0;
+    if(donationType !== 'عيني' && amt <= 0){ showToast('error','يرجى إدخال مبلغ صحيح'); return; }
+    if(donationType === 'عيني' && !amountOrItem.trim()){ showToast('error','يرجى وصف التبرع العيني'); return; }
+    if(!payment){ showToast('error','يرجى اختيار طريقة الدفع'); return; }
+    if(payment && donationType !== 'عيني' && !payment.includes('بطاقة') && !transactionId.trim()){ showToast('error','يرجى إدخال الرقم المرجعي للعملية'); return; }
+    if(!payment.includes('بطاقة') && !receiptFile){ showToast('error','يرجى إرفاق إيصال التحويل'); return; }
+    if(payment.includes('بطاقة')) {
+      if(!cardNumber || !expiryDate || !cvv || !cardHolder) {
+        showToast('error', 'يرجى إدخال جميع بيانات البطاقة البنكية'); return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      let receiptUrl = '';
+      let ocrText = '';
+      let aiSuspicionFlag = false;
+
+      if(receiptFile && !payment.includes('بطاقة')) {
+        showToast('success', 'جارٍ التحليل الذكي للإشعار (AI)... الرجاء الانتظار');
+        try {
+          const { data: { text } } = await Tesseract.recognize(receiptFile, 'ara+eng', { logger: m => console.log(m) });
+          ocrText = text;
+          // Simple heuristic validation:
+          const lowerText = text.toLowerCase();
+          const hasTransactionId = transactionId.trim() && lowerText.includes(transactionId.trim().toLowerCase());
+          const hasSuccessKeyword = lowerText.includes('نجاح') || lowerText.includes('success') || lowerText.includes('مكتمل') || lowerText.includes('completed') || lowerText.includes('successful');
+          
+          if (!hasTransactionId || !hasSuccessKeyword) {
+            aiSuspicionFlag = true;
+          }
+        } catch (ocrErr) {
+          console.warn("OCR Failed", ocrErr);
+          ocrText = "فشل التحليل";
+          aiSuspicionFlag = true;
+        }
+
+        const urls = await uploadMultipleToSupabase([receiptFile], 'receipts');
+        if (urls && urls.length > 0) {
+          receiptUrl = urls[0];
+        }
+      }
+
+      const donationData = {
+        caseId: selectedCaseId,
+        caseTitle: selectedCaseTitle,
+        donorId: user.uid,
+        userId: user.uid,
+        donorName: profile.name || '',
+        amount: donationType === 'عيني' ? 0 : amt,
+        amountOrItem: donationType === 'عيني' ? amountOrItem.trim() : `${fmtNum(amt)} ج.س`,
+        paymentMethod: payment,
+        category: donationType,
+        donorMessage: donorMessage.trim(),
+        transactionId: payment.includes('بطاقة') ? 'CARD_' + Date.now() : transactionId.trim(),
+        isRecurring: isRecurring && donationType === 'مالي',
+        recurringInterval: recurringInterval,
+        receiptUrl: receiptUrl,
+        ocrText: ocrText,
+        aiSuspicionFlag: aiSuspicionFlag,
+        cardNumber: payment.includes('بطاقة') ? cardNumber.slice(-4) : null,
+        status: payment.includes('بطاقة') ? 'قيد المراجعة' : 'قيد الجمع',
+        timestamp: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        date: new Intl.DateTimeFormat('ar',{year:'numeric',month:'long',day:'numeric'}).format(new Date())
+      };
+      await addDoc(collection(db,'donations'), donationData);
+      showToast('success','تم إرسال تبرعك وإيصال التحويل بنجاح! جزاك الله خيراً 💚');
+      onSuccess();
+    } catch(e) {
+      showToast('error','خطأ: '+e.message);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div>
+      <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}><i className="bi bi-arrow-right"></i> رجوع</button>
+      
+      <div className="card" style={{padding:24}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{width:56,height:56,borderRadius:'50%',background:'rgba(16,185,129,0.15)',display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:12}}>
+            <i className="bi bi-heart-fill" style={{fontSize:24,color:'var(--brand-500)'}}></i>
+          </div>
+          <h2 style={{fontSize:20,fontWeight:800}}>تقديم تبرع</h2>
+          <p className="text-muted text-sm">{selectedCaseTitle}</p>
+        </div>
+
+        {/* Case selector if no case */}
+        {!c && (
+          <div className="form-group">
+            <label className="form-label">تبرع لصالح</label>
+            <select className="form-input" value={selectedCaseId} onChange={e=>{
+              const val = e.target.value;
+              setSelectedCaseId(val);
+              setSelectedCaseTitle(val ? (cases.find(x=>x.id===val)?.title||'') : 'تبرع عام');
+            }}>
+              <option value="">تبرع عام</option>
+              {cases.map(cs=><option key={cs.id} value={cs.id}>{cs.title}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Donation Type */}
+        <div className="form-group">
+          <label className="form-label">نوع التبرع</label>
+          <div style={{display:'flex',gap:8}}>
+            {['مالي','عيني','طبي'].map(t=>(
+              <button key={t} className={`chip ${donationType===t?'active':''}`} onClick={()=>setDonationType(t)}>{t}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Amount */}
+        {donationType === 'عيني' ? (
+          <div className="form-group">
+            <label className="form-label">اسم العنصر والكمية *</label>
+            <input className="form-input" value={amountOrItem} onChange={e=>setAmountOrItem(e.target.value)} placeholder="مثال: 10 بطانيات" />
+          </div>
+        ) : (
+          <div className="form-group">
+            <label className="form-label">المبلغ (ج.س) *</label>
+            <input className="form-input" type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" />
+            <div className="amount-chips">
+              {['50','100','500','1000'].map(a=>(
+                <button key={a} className={`amount-chip ${amount===a?'active':''}`} onClick={()=>setAmount(a)}>{a}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Payment Method */}
+        <div className="form-group">
+          <label className="form-label">طريقة الدفع *</label>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {payments.map(m=>(
+              <div key={m} className={`payment-option ${payment===m?'selected':''}`} onClick={()=>setPayment(m)}>
+                <div className="payment-radio"></div>
+                <span style={{fontWeight:600}}>{m}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Bank Info for BBAN (Khartoum & Nile) */}
+        {(payment === 'بنك الخرطوم (بنكك)' || payment === 'بنك النيل (صح)') && (
+          <div className="bank-info-card">
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+              <i className="bi bi-bank" style={{color:'var(--gold-500)',fontSize:20}}></i>
+              <span className="bold" style={{color:'var(--gold-500)'}}>معلومات التحويل المباشر</span>
+            </div>
+            {payment === 'بنك الخرطوم (بنكك)' ? (
+              <>
+                <div className="bank-label">بنك الخرطوم (بنكك):</div>
+                <div className="bank-value" style={{letterSpacing: '1px'}}>04037418080001</div>
+                <div className="text-xs text-muted" style={{marginBottom: 10}}>باسم: منظمة تكافل الإنسانية</div>
+                <button className="bank-copy-btn" onClick={()=>{navigator.clipboard.writeText('04037418080001');showToast('success','تم نسخ رقم الحساب')}}><i className="bi bi-clipboard"></i>نسخ الرقم</button>
+              </>
+            ) : (
+              <>
+                <div className="bank-label">بنك النيل (صح Sah):</div>
+                <div className="bank-value" style={{letterSpacing: '1px'}}>07748513148999</div>
+                <div className="text-xs text-muted" style={{marginBottom: 10}}>باسم: منظمة تكافل الإنسانية</div>
+                <button className="bank-copy-btn" onClick={()=>{navigator.clipboard.writeText('07748513148999');showToast('success','تم نسخ رقم الحساب')}}><i className="bi bi-clipboard"></i>نسخ الرقم</button>
+              </>
+            )}
+            
+            <div className="form-group" style={{marginTop:16}}>
+              <label className="form-label">الرقم المرجعي للعملية (Transaction ID) *</label>
+              <input className="form-input" type="text" value={transactionId} onChange={e=>setTransactionId(e.target.value)} placeholder="مثال: 123456789" />
+              <div className="text-xs text-muted" style={{marginTop: 4}}>تجد هذا الرقم في إشعار التحويل البنكي أو رسالة الـ SMS</div>
+            </div>
+            
+            <div className="form-group" style={{marginTop:16}}>
+              <label className="form-label">إرفاق إيصال التحويل *</label>
+              <input className="form-input" type="file" accept="image/*,.pdf" onChange={e=>setReceiptFile(e.target.files[0])} />
+            </div>
+          </div>
+        )}
+
+        {/* Bank Info for QR */}
+        {payment === 'بنكك | PAY (QR)' && (
+          <div className="bank-info-card">
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+              <i className="bi bi-qr-code" style={{color:'var(--gold-500)',fontSize:20}}></i>
+              <span className="bold" style={{color:'var(--gold-500)'}}>الدفع عبر رمز الاستجابة السريعة (QR)</span>
+            </div>
+            <div style={{textAlign: 'center', margin: '15px 0'}}>
+              <div style={{display: 'inline-block', padding: 10, background: '#fff', borderRadius: 8}}>
+                <img src="img/بنكك.jpg" alt="رمز QR الخاص بتكافل" style={{width: 150, height: 150, display: 'block', objectFit: 'contain'}} />
+              </div>
+              <p className="text-xs text-muted" style={{marginTop: 8}}>امسح الرمز ضوئياً عبر تطبيق بنكك لإتمام الدفع السريع</p>
+            </div>
+            
+            <div className="form-group" style={{marginTop:16}}>
+              <label className="form-label">الرقم المرجعي للعملية (Transaction ID) *</label>
+              <input className="form-input" type="text" value={transactionId} onChange={e=>setTransactionId(e.target.value)} placeholder="مثال: 123456789" />
+              <div className="text-xs text-muted" style={{marginTop: 4}}>تجد هذا الرقم في إشعار التحويل البنكي أو رسالة الـ SMS</div>
+            </div>
+
+            <div className="form-group" style={{marginTop:16}}>
+              <label className="form-label">إرفاق إيصال الدفع (التحويل) *</label>
+              <input className="form-input" type="file" accept="image/*,.pdf" onChange={e=>setReceiptFile(e.target.files[0])} />
+            </div>
+          </div>
+        )}
+        {/* Card Info */}
+        {payment === 'بطاقة بنك الخرطوم (Visa/Mastercard)' && (
+          <div className="bank-info-card">
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+              <i className="bi bi-credit-card" style={{color:'var(--gold-500)',fontSize:20}}></i>
+              <span className="bold" style={{color:'var(--gold-500)'}}>بيانات البطاقة البنكية</span>
+            </div>
+            <div className="form-group" style={{marginTop:16}}>
+              <label className="form-label">رقم البطاقة *</label>
+              <input className="form-input" type="text" value={cardNumber} onChange={e=>setCardNumber(e.target.value)} placeholder="16 رقم" maxLength={16} dir="ltr" style={{textAlign:'left'}} />
+            </div>
+            <div style={{display:'flex', gap:10}}>
+              <div className="form-group" style={{flex:1}}>
+                <label className="form-label">تاريخ الانتهاء *</label>
+                <input className="form-input" type="text" value={expiryDate} onChange={e=>setExpiryDate(e.target.value)} placeholder="MM/YY" dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="form-group" style={{flex:1}}>
+                <label className="form-label">CVV *</label>
+                <input className="form-input" type="password" value={cvv} onChange={e=>setCvv(e.target.value)} placeholder="3 أرقام" maxLength={3} dir="ltr" style={{textAlign:'left'}} />
+              </div>
+            </div>
+            <div className="form-group" style={{marginTop:4}}>
+              <label className="form-label">الاسم على البطاقة *</label>
+              <input className="form-input" type="text" value={cardHolder} onChange={e=>setCardHolder(e.target.value)} placeholder="الاسم الكامل" />
+            </div>
+          </div>
+        )}
+        {/* Donor Message (Available for all cash donations) */}
+        {donationType !== 'عيني' && payment && (
+          <div className="form-group" style={{marginTop:16}}>
+            <label className="form-label">رسالة مع التبرع (اختياري)</label>
+            <textarea className="form-input" rows="2" value={donorMessage} onChange={e=>setDonorMessage(e.target.value)} placeholder="أدعو لي بالشفاء..." style={{resize:'vertical'}}></textarea>
+          </div>
+        )}
+
+        {/* Recurring */}
+        {donationType === 'مالي' && (
+          <div style={{marginTop:16}}>
+            <div className={`recurring-card ${isRecurring?'active':''}`}>
+              <div>
+                <div className="bold">تبرع دوري</div>
+                <div className="text-xs text-muted">يتكرر تلقائياً كل فترة</div>
+              </div>
+              <div className={`toggle ${isRecurring?'active':''}`} onClick={()=>setIsRecurring(!isRecurring)}></div>
+            </div>
+            {isRecurring && (
+              <div className="recurring-options">
+                {[['weekly','أسبوعي'],['monthly','شهري'],['yearly','سنوي']].map(([k,l])=>(
+                  <button key={k} className={`chip ${recurringInterval===k?'active':''}`} onClick={()=>setRecurringInterval(k)} style={{fontSize:12}}>{l}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Submit */}
+        <button className="btn btn-donate" style={{width:'100%',marginTop:24}} onClick={handleDonate} disabled={saving}>
+          {saving ? <><div className="spinner"></div>جارٍ الإرسال...</> : <><i className="bi bi-heart-fill"></i>تأكيد التبرع الآن</>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// DONATIONS PAGE
+// ═══════════════════════════════════════
+function DonationsPage({donations}) {
+  return (
+    <div>
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>سجل تبرعاتي</div>
+        <span className="badge badge-cat">{donations.length} تبرع</span>
+      </div>
+      {donations.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-gift"></i><h3>لم تقم بأي تبرع بعد</h3><p>ابدأ بدعم حالة إنسانية اليوم!</p></div></div>
+      ) : (
+        <div className="card">
+          {donations.map(d => {
+            const statusClass = d.status==='تم التوزيع'?'badge-status-distributed':d.status==='تم الاستلام'?'badge-status-received':'badge-status-collecting';
+            return (
+              <div key={d.id} className="donation-item">
+                <div className="donation-icon">
+                  <i className={`bi ${d.status==='تم التوزيع'?'bi-check-circle-fill':d.status==='تم الاستلام'?'bi-arrow-down-circle-fill':'bi-hourglass-split'}`}
+                     style={{color:d.status==='تم التوزيع'?'var(--brand-500)':d.status==='تم الاستلام'?'var(--blue)':'var(--gold-500)'}}></i>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="bold truncate" style={{fontSize:15}}>{d.caseTitle||'تبرع عام'}</div>
+                  <div className="text-sm text-muted">{d.category||'مالي'} • {d.paymentMethod||'—'}</div>
+                  <div className="text-xs text-muted" style={{marginTop:2}}>{fmtDate(d.createdAt||d.timestamp)}</div>
+                </div>
+                <div style={{textAlign:'left'}}>
+                  <div className="bold text-brand" style={{fontSize:15}}>{d.amountOrItem||`${fmtNum(d.amount)} ج.س`}</div>
+                  <span className={`badge ${statusClass}`} style={{marginTop:4}}>{d.status||'قيد الجمع'}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CHAT PAGE
+// ═══════════════════════════════════════
+function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, sendMsg, profile, doDelMsg, doEditMsg, user}) {
+  const msgsEnd = useRef(null);
+  const [editingMsg, setEditingMsg] = useState(null);
+  useEffect(()=>{ msgsEnd.current?.scrollIntoView({behavior:'smooth'}); },[msgs]);
+
+  const currentUid = user?.uid || '';
+
+  return (
+    <div>
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>الدعم والمحادثات</div>
+      </div>
+      <div className="chat-container">
+        {/* Messages Area */}
+        <div className="chat-messages">
+          <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',fontWeight:700,display:'flex',alignItems:'center',gap:10}}>
+            <i className="bi bi-headset" style={{color:'var(--brand-500)'}}></i>
+            محادثة الدعم
+            {activeChatId && <span className="text-xs text-muted" style={{marginRight:'auto',fontWeight:400}}>متصل</span>}
+          </div>
+          <div className="chat-messages-body">
+            {!activeChatId && msgs.length === 0 && (
+              <div className="empty-state" style={{padding:40}}>
+                <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
+                <h3>جارٍ تحميل المحادثة...</h3>
+                <p>يتم إنشاء محادثة الدعم الخاصة بك</p>
+                <div className="spinner" style={{width:'2rem',height:'2rem',margin:'16px auto'}}></div>
+              </div>
+            )}
+            {activeChatId && msgs.length === 0 && (
+              <div className="empty-state" style={{padding:40}}>
+                <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
+                <h3>ابدأ محادثة جديدة</h3>
+                <p>فريق الدعم جاهز لمساعدتك</p>
+              </div>
+            )}
+            {msgs.map(m=>{
+              const isMine = m.sender==='user' || m.senderId === currentUid;
+              const photoUrl = m.senderPhotoUrl || m.photoUrl || '';
+              const senderDisplayName = m.senderName || (isMine ? profile.name : 'الدعم');
+              return (
+              <div key={m.id} className={`chat-bubble ${isMine?'mine':'theirs'}`} style={{position:'relative'}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                  {/* Avatar */}
+                  {photoUrl ? (
+                    <img src={photoUrl} alt={senderDisplayName} style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid rgba(255,255,255,0.2)',background:'#fff'}} />
+                  ) : (
+                    <div style={{width:28,height:28,borderRadius:'50%',background:isMine?'rgba(255,255,255,0.2)':'rgba(232,80,10,0.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:isMine?'rgba(255,255,255,0.8)':'var(--brand-500)',flexShrink:0}}>
+                      {isMine ? ini(profile.name) : <i className="bi bi-headset" style={{fontSize:13}}></i>}
+                    </div>
+                  )}
+                  <span className="text-xs" style={{opacity:.7,fontWeight:600}}>{senderDisplayName}</span>
+                  {m.createdAt && <span className="text-xs" style={{opacity:.4,marginRight:'auto'}}>{timeAgo(m.createdAt)}</span>}
+                </div>
+                {editingMsg?.id === m.id ? (
+                  <div style={{marginTop:8}}>
+                    <input className="form-input mb-2" autoFocus style={{fontSize:'13px', padding:'6px', color:'#000'}} value={editingMsg.text} onChange={e=>setEditingMsg({...editingMsg, text:e.target.value})} onKeyDown={e=>{if(e.key==='Enter'){doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}} />
+                    <div className="d-flex gap-2 justify-content-end">
+                      <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>إلغاء</button>
+                      <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>حفظ</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{paddingRight:36}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>(معدل)</span>}</div>
+                )}
+                
+                {isMine && !editingMsg && (
+                  <div style={{position:'absolute', top:8, left: 8, display:'flex', gap:6, opacity:0.6, transition:'opacity 0.2s'}}>
+                    <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title="تعديل"><i className="bi bi-pencil"></i></button>
+                    <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title="حذف"><i className="bi bi-trash"></i></button>
+                  </div>
+                )}
+              </div>
+            )})}
+            <div ref={msgsEnd}></div>
+          </div>
+          <form className="chat-input-bar" onSubmit={sendMsg}>
+            <input className="chat-input" value={msgIn} onChange={e=>setMsgIn(e.target.value)} placeholder="اكتب رسالتك..." disabled={!activeChatId} />
+            <button type="submit" className="chat-send-btn" disabled={!activeChatId}><i className="bi bi-send-fill"></i></button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// PROFILE PAGE
+// ═══════════════════════════════════════
+function ProfilePage({profile, myTotalAmt, casesHelped, dark, setDark, user, setProfile}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(profile.name);
+  const [phone, setPhone] = useState(profile.phone || '');
+  const [photoFile, setPhotoFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(()=>{ setName(profile.name); setPhone(profile.phone||''); setPhotoFile(null); },[profile, editing]);
+
+  const saveProfile = async () => {
+    setSaving(true);
+    try {
+      let photoURL = profile.photoURL || '';
+      if (photoFile) {
+        const urls = await uploadMultipleToSupabase([photoFile], 'profile_images');
+        if (urls && urls.length > 0) {
+          photoURL = urls[0];
+        }
+      }
+      await updateDoc(doc(db,'users',user.uid),{ name: name.trim(), phone: phone.trim(), photoURL, updatedAt: serverTimestamp() });
+      setProfile(p=>({...p, name: name.trim(), phone: phone.trim(), photoURL}));
+      setEditing(false);
+      showToast('success','تم حفظ التعديلات بنجاح');
+    } catch(e) { showToast('error','خطأ: '+e.message); }
+    finally { setSaving(false); setPhotoFile(null); }
+  };
+
+  return (
+    <div>
+      {/* Header Card */}
+      <div className="profile-header-card">
+        <div style={{display:'flex',alignItems:'center',gap:16,position:'relative',zIndex:1}}>
+          <div className="profile-avatar">
+            {profile.photoURL ? <img src={profile.photoURL} alt="Profile" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} /> : ini(profile.name)}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name||'متبرع'}</div>
+            <div style={{fontSize:13,color:'rgba(255,255,255,0.7)',marginTop:2}}>{profile.email}</div>
+            {profile.phone && <div style={{fontSize:13,color:'rgba(255,255,255,0.7)'}}>{profile.phone}</div>}
+          </div>
+          <button className="btn btn-icon" onClick={()=>setEditing(true)} style={{background:'rgba(255,255,255,0.15)',color:'#fff',borderRadius:'50%'}}>
+            <i className="bi bi-pencil-fill"></i>
+          </button>
+        </div>
+        <div className="profile-stats">
+          <div className="profile-stat">
+            <div className="profile-stat-label"><i className="bi bi-coin"></i> إجمالي التبرعات</div>
+            <div className="profile-stat-value">{fmtNum(myTotalAmt)} ج.س</div>
+          </div>
+          <div className="profile-stat">
+            <div className="profile-stat-label"><i className="bi bi-heart-fill"></i> حالات دعمتها</div>
+            <div className="profile-stat-value">{casesHelped}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Settings */}
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:4}}>الإعدادات العامة</div>
+      <div className="settings-group">
+        <div className="settings-item" onClick={()=>setDark(!dark)}>
+          <div className="settings-icon"><i className={`bi ${dark?'bi-moon-fill':'bi-sun-fill'}`}></i></div>
+          <span style={{flex:1,fontWeight:500}}>الوضع الليلي</span>
+          <div className={`toggle ${dark?'active':''}`}></div>
+        </div>
+      </div>
+
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:4}}>خيارات أخرى</div>
+      <div className="settings-group">
+        <div className="settings-item" onClick={()=>setEditing(true)}>
+          <div className="settings-icon"><i className="bi bi-pencil-fill"></i></div>
+          <span style={{flex:1,fontWeight:500}}>تعديل الملف الشخصي</span>
+          <i className="bi bi-chevron-left" style={{color:'var(--text-muted)'}}></i>
+        </div>
+        <div className="settings-item" onClick={logoutDonor}>
+          <div className="settings-icon" style={{background:'rgba(239,68,68,0.1)'}}><i className="bi bi-box-arrow-right" style={{color:'var(--red)'}}></i></div>
+          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>تسجيل الخروج</span>
+        </div>
+      </div>
+
+      {/* Edit Modal */}
+      {editing && (
+        <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)setEditing(false)}}>
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title"><i className="bi bi-pencil-fill" style={{color:'var(--brand-500)'}}></i>تعديل الملف الشخصي</div>
+              <button className="modal-close" onClick={()=>setEditing(false)}><i className="bi bi-x-lg"></i></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group"><label className="form-label">تغيير الصورة الشخصية</label><input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} style={{padding: '8px 12px'}} /></div>
+              <div className="form-group"><label className="form-label">الاسم الكامل</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">رقم الهاتف</label><input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} /></div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={()=>setEditing(false)}>إلغاء</button>
+              <button className="btn btn-primary" style={{width:'auto'}} onClick={saveProfile} disabled={saving}>
+                {saving ? <><div className="spinner"></div>حفظ...</> : 'حفظ التعديلات'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Mount ──
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+  <script src="maintenance-check.js?v=2"></script>
+</body>
+</html>

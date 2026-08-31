@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>تكافل - استعادة الحساب</title>
+  <link rel="icon" type="image/webp" href="../app-icon.webp">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+  
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="donor-style.css">
+  <style>
+    .recovery-step { display: none; animation: slide-in 0.4s ease forwards; }
+    .recovery-step.active { display: block; }
+    
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body class="auth-page">
+
+  <!-- Theme Toggle -->
+  <button id="theme-toggle" class="theme-toggle-btn" aria-label="تبديل الوضع" style="display:flex;align-items:center;padding:5px 6px;border-radius:50px;cursor:pointer;transition:all 0.35s ease;gap:2;min-width:70px;position:absolute;top:20px;left:20px;z-index:10;backdrop-filter:blur(10px)">
+    <span id="theme-icon-sun" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.35s ease;font-size:14px;">☀️</span>
+    <span id="theme-icon-moon" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.35s ease;font-size:14px;">🌙</span>
+  </button>
+
+  <div class="auth-card">
+    
+    <!-- Left Panel (Branding) -->
+    <div class="auth-left-panel">
+      <div class="auth-logo">
+        <div class="auth-logo-icon">
+          <img src="../app-icon.webp" alt="Takaful Logo" style="width:100%; height:100%; border-radius:50%; object-fit:cover;">
+        </div>
+        <h1>تـكـافـل</h1>
+        <p>نبض العطاء وإشراقة الأمل</p>
+      </div>
+    </div>
+
+    <!-- Right Panel (Forms) -->
+    <div class="auth-right-panel">
+      
+      <!-- Back Button -->
+      <a href="index.html" style="display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); text-decoration:none; margin-bottom:24px; font-size:14px; font-weight:600; transition:color 0.3s ease;" onmouseover="this.style.color='var(--brand-500)'" onmouseout="this.style.color='var(--text-muted)'">
+        <i class="bi bi-arrow-right"></i> العودة لتسجيل الدخول
+      </a>
+
+      <!-- STEP 1: Enter Email -->
+      <div id="step-1" class="recovery-step active">
+        <h2 class="auth-title">استعادة الحساب</h2>
+        <p class="auth-subtitle" style="margin-bottom:30px;">الطريقة الرسمية والآمنة 100%: أدخل بريدك الإلكتروني وسنرسل لك رابطاً مشفراً وآمناً لإعادة تعيين كلمة المرور الخاصة بك مجاناً.</p>
+        
+        <div class="form-group">
+          <label class="form-label">البريد الإلكتروني</label>
+          <div class="input-group">
+            <span class="input-icon" style="right: 14px;"><i class="bi bi-envelope-fill"></i></span>
+            <input type="email" id="recover-email" class="form-input" placeholder="email@example.com" style="padding-left: 40px;" required>
+          </div>
+        </div>
+
+        <button id="send-btn" class="btn btn-primary" style="border-radius:50px; margin-top:10px;">
+          <span id="send-btn-text">إرسال رابط الاستعادة</span>
+        </button>
+      </div>
+
+      <!-- STEP 2: Success -->
+      <div id="step-2" class="recovery-step" style="text-align: center; padding: 20px 0;">
+        <i class="bi bi-envelope-check-fill" style="font-size: 64px; color: var(--brand-500); margin-bottom: 20px; display: block;"></i>
+        <h2 class="auth-title">تم الإرسال بنجاح!</h2>
+        <p class="auth-subtitle" style="margin-bottom:24px;">لقد أرسلنا رابطاً آمناً لإعادة تعيين كلمة المرور إلى بريدك الإلكتروني. يرجى التحقق من صندوق الوارد (أو البريد العشوائي/Spam).</p>
+
+        <button class="btn btn-primary" onclick="window.location.href='index.html'" style="border-radius:50px; margin-top:16px;">العودة لتسجيل الدخول</button>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+  <script src="../utils.js" type="module"></script>
+  
+  <script type="module">
+    import { resetPasswordDonorEmail } from './donor-auth.js';
+    import { showToast } from '../utils.js';
+
+    // ── Theme Toggle ──
+    (function () {
+      const saved = localStorage.getItem('takaful-theme-mode') || 'auto';
+      const isDay = saved === 'auto' ? (new Date().getHours() >= 6 && new Date().getHours() < 18) : (saved === 'light');
+      document.documentElement.setAttribute('data-theme', isDay ? 'light' : 'dark');
+    })();
+
+    const themeToggleBtn = document.getElementById('theme-toggle');
+    function updateThemeIcon() {
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      themeToggleBtn.style.background = isLight ? 'rgba(255,200,50,0.15)' : 'rgba(30,30,60,0.9)';
+      themeToggleBtn.style.borderColor = isLight ? 'rgba(249,168,37,0.35)' : 'rgba(100,100,255,0.2)';
+      document.getElementById('theme-icon-sun').style.background = isLight ? '#F9A825' : 'transparent';
+      document.getElementById('theme-icon-sun').style.color = isLight ? '#fff' : 'rgba(255,200,50,0.4)';
+      document.getElementById('theme-icon-moon').style.background = isLight ? 'transparent' : 'rgba(99,102,241,0.8)';
+      document.getElementById('theme-icon-moon').style.color = isLight ? 'rgba(99,102,241,0.3)' : '#fff';
+    }
+    updateThemeIcon();
+    themeToggleBtn.addEventListener('click', () => {
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
+      localStorage.setItem('takaful-theme-mode', isLight ? 'dark' : 'light');
+      updateThemeIcon();
+    });
+
+    // ── Logic ──
+    document.getElementById('send-btn').addEventListener('click', async () => {
+      const email = document.getElementById('recover-email').value;
+      if (!email) {
+        showToast('error', 'يرجى إدخال البريد الإلكتروني');
+        return;
+      }
+      
+      const btn = document.getElementById('send-btn');
+      const text = document.getElementById('send-btn-text');
+      btn.disabled = true;
+      text.textContent = 'جارٍ الإرسال...';
+      
+      try {
+        await resetPasswordDonorEmail(email);
+        document.getElementById('step-1').classList.remove('active');
+        document.getElementById('step-2').classList.add('active');
+      } catch (e) {
+        btn.disabled = false;
+        text.textContent = 'إرسال رابط الاستعادة';
+        let msg = 'حدث خطأ غير متوقع';
+        if (e.code === 'auth/user-not-found') msg = 'لا يوجد حساب بهذا البريد الإلكتروني';
+        else if (e.code === 'auth/invalid-email') msg = 'صيغة البريد غير صحيحة';
+        showToast('error', msg);
+      }
+    });
+  </script>
+</body>
+</html>

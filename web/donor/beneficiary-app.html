@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="تكافل — بوابة المستفيدين | تقديم ومتابعة الطلبات الإنسانية">
+  <title>تكافل — بوابة المستفيدين</title>
+  <link rel="icon" type="image/webp" href="../app-icon.webp">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="donor-style.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "firebase-config": "../firebase-config.js",
+      "donor-auth": "./donor-auth.js",
+      "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18/jsx-dev-runtime"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root">
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#07090f">
+    <div style="text-align:center">
+      <div class="spinner" style="width:2.5rem;height:2.5rem;margin:0 auto"></div>
+      <p style="margin-top:16px;color:rgba(255,255,255,0.5);font-family:Tajawal,sans-serif">تحميل بوابة المستفيدين...</p>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container" class="toast-container"></div>
+
+<script type="text/babel" data-type="module">
+import { auth, db } from 'firebase-config';
+import { uploadMultipleToSupabase } from '../supabase-config.js';
+import {
+  collection, query, where, orderBy, onSnapshot,
+  doc, addDoc, updateDoc, serverTimestamp
+} from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
+import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
+
+const { useState, useEffect } = React;
+
+// ─── HELPERS ───
+const ini = (n='') => (n||'م').trim().split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'م';
+const fmtNum = n => Number(n||0).toLocaleString('ar');
+const fmtDate = ts => {
+  if(!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
+  return new Intl.DateTimeFormat('ar',{year:'numeric',month:'short',day:'numeric'}).format(d);
+};
+
+function showToast(type, msg) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<i class="bi ${type==='success'?'bi-check-circle-fill':'bi-exclamation-circle-fill'}"></i><span>${msg}</span>`;
+  c.appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3000);
+}
+
+const Av = ({name, size=36}) => (
+  <div className="avatar" style={{width:size,height:size,fontSize:`${size*.38}px`}}>{ini(name)}</div>
+);
+
+// ═══════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════
+function App() {
+  const [page, setPage] = useState('home');
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState({name:'...',email:''});
+  const [myCases, setMyCases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [dark, setDark] = useState(() => {
+    const mode = localStorage.getItem('takaful-theme-mode');
+    if (mode === 'light') return false;
+    if (mode === 'dark') return true;
+    const hour = new Date().getHours();
+    return !(hour >= 6 && hour < 18);
+  });
+
+  useEffect(()=>{
+    document.documentElement.setAttribute('data-theme',dark?'dark':'light');
+    localStorage.setItem('takaful-theme-mode',dark?'dark':'light');
+  },[dark]);
+
+  useEffect(()=>{
+    const unsub = requireDonorAuth(async u => {
+      setUser(u);
+      const p = await getDonorProfile(u.uid);
+      setProfile(p);
+      setLoading(false);
+    });
+    return ()=>unsub&&unsub();
+  },[]);
+
+  useEffect(()=>{
+    if(loading||!user) return;
+    const q = query(collection(db,'cases'), where('beneficiaryId','==',user.uid));
+    const unsub = onSnapshot(q, s => {
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      docs.sort((a,b)=>{
+        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return tB - tA;
+      });
+      setMyCases(docs);
+    });
+    return ()=>unsub();
+  },[loading, user]);
+
+  if(loading) return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div className="spinner"></div>
+    </div>
+  );
+
+  const NAV = [
+    {id:'home',l:'الرئيسية',icon:'bi-house-fill'},
+    {id:'cases',l:'طلباتي',icon:'bi-card-list'},
+    {id:'submit',l:'تقديم طلب',icon:'bi-plus-circle-fill'},
+    {id:'profile',l:'حسابي',icon:'bi-person-fill'},
+  ];
+
+  return (
+    <div className="app-layout">
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <img src="../app-icon.webp" alt="تكافل" />
+          </div>
+          <div className="sidebar-brand">
+            <h2>تـكـافـل</h2>
+            <p style={{color:'var(--gold-500)'}}>بوابة المستفيدين</p>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {NAV.map(n=>(
+            <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>setPage(n.id)} role="button">
+              <i className={`bi ${n.icon} nav-icon`}></i>
+              <span style={{flex:1}}>{n.l}</span>
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="user-card" style={{flexDirection:'column',gap:10,padding:'14px 16px',alignItems:'flex-start'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,width:'100%'}}>
+              {profile.photoURL
+                ? <img src={profile.photoURL} alt={profile.name} style={{width:40,height:40,borderRadius:'50%',objectFit:'cover',border:'none',flexShrink:0, background:'#FFFFFF'}} />
+                : <div className="avatar" style={{width:40,height:40,fontSize:'15px'}}>{ini(profile.name)}</div>
+              }
+              <div style={{flex:1,minWidth:0}}>
+                <div className="user-name truncate" style={{fontSize:13}}>{profile.name}</div>
+                <div className="user-role truncate" style={{fontSize:11,color:'var(--gold-500)'}}>بوابة المستفيدين</div>
+              </div>
+            </div>
+            <button
+              onClick={logoutDonor}
+              style={{width:'100%',padding:'9px 14px',borderRadius:'var(--radius-sm)',background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.2)',color:'#F87171',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8,transition:'all 0.2s ease'}}
+              onMouseEnter={e=>{e.currentTarget.style.background='rgba(239,68,68,0.2)'}}
+              onMouseLeave={e=>{e.currentTarget.style.background='rgba(239,68,68,0.1)'}}
+            >
+              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div className="main-content">
+        <header className="topbar">
+          <div style={{flex:1}}>
+            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || 'تكافل'}</div>
+          </div>
+          <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            {/* Day/Night pill toggle */}
+            <button
+              onClick={()=>setDark(d=>!d)}
+              title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
+              style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(30,30,60,0.9)':'rgba(255,200,50,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.2)':'rgba(249,168,37,0.35)',cursor:'pointer',transition:'all 0.35s ease',backdropFilter:'blur(10px)',gap:2,minWidth:70}}
+            >
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'none':'0 2px 8px rgba(249,168,37,0.5)'}}>☀️</span>
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.8)':'transparent',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'0 2px 8px rgba(99,102,241,0.5)':'none'}}>🌙</span>
+            </button>
+          </div>
+        </header>
+        <main className="page-content">
+          {profile.status === 'pending_verification' ? (
+            <div className="card" style={{textAlign:'center', padding:'40px 20px', marginTop:'20px'}}>
+              <i className="bi bi-shield-lock-fill" style={{fontSize:48, color:'var(--gold-500)', marginBottom:16, display:'block'}}></i>
+              <h3>حسابك قيد المراجعة</h3>
+              <p style={{color:'var(--text-secondary)', marginTop:8}}>
+                لقد استلمنا طلب تسجيلك والمرفقات الخاصة بإثبات الهوية.<br/>
+                سيقوم مدير النظام بمراجعة الطلب والموافقة عليه قريباً. يرجى التحلي بالصبر.
+              </p>
+            </div>
+          ) : (
+            <>
+              {page==='home' && <HomePage cases={myCases} profile={profile} onGoSubmit={()=>setPage('submit')} onGoCases={()=>setPage('cases')} />}
+              {page==='cases' && <MyCasesPage cases={myCases} />}
+              {page==='submit' && <SubmitCasePage user={user} onSuccess={()=>setPage('cases')} />}
+              {page==='profile' && <ProfilePage profile={profile} cases={myCases} dark={dark} setDark={setDark} user={user} setProfile={setProfile} />}
+            </>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// HOME PAGE
+// ═══════════════════════════════════════
+function HomePage({cases, profile, onGoSubmit, onGoCases}) {
+  const pending = cases.filter(c=>c.status==='pending').length;
+  const active = cases.filter(c=>c.status==='active'||c.status==='approved').length;
+  const completed = cases.filter(c=>c.status==='completed').length;
+  
+  const hour = new Date().getHours();
+  const greeting = hour>=5&&hour<12?'صباح الخير':hour>=12&&hour<18?'مساء الخير':'طابت مساؤك';
+
+  return (
+    <div>
+      <div className="hero-header" style={{background:'linear-gradient(135deg,var(--brand-800),var(--gold-700))'}}>
+        <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:16}}>
+          <div style={{position:'relative'}}>
+            {profile.photoURL
+              ? <img src={profile.photoURL} alt={profile.name} style={{width:56,height:56,borderRadius:'50%',objectFit:'cover',border:'none',boxShadow:'0 4px 16px rgba(0,0,0,0.3)', background:'#FFFFFF'}} />
+              : <div style={{width:56,height:56,borderRadius:'50%',background:'rgba(255,255,255,0.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,fontWeight:900,color:'#fff',border:'none'}}>{ini(profile.name)}</div>
+            }
+          </div>
+          <div>
+            <div className="hero-greeting" style={{fontSize:13}}>{greeting}،</div>
+            <div className="hero-name" style={{fontSize:20}}>{(profile.name||'').split(' ').slice(0,2).join(' ')||'مستفيد'}</div>
+          </div>
+        </div>
+        <div className="hero-stats">
+          <div className="hero-stat" onClick={onGoCases} style={{cursor:'pointer'}}>
+            <div className="hero-stat-label"><i className="bi bi-folder2-open"></i> طلبات نشطة</div>
+            <div className="hero-stat-value">{active} طلب</div>
+          </div>
+          <div className="hero-stat">
+            <div className="hero-stat-label"><i className="bi bi-clock-history"></i> قيد المراجعة</div>
+            <div className="hero-stat-value">{pending} طلب</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:'flex',gap:16,marginBottom:24,flexWrap:'wrap'}}>
+        <button className="btn btn-primary" onClick={onGoSubmit} style={{flex:1,minWidth:200,height:56,fontSize:16}}>
+          <i className="bi bi-plus-circle-fill"></i> تقديم طلب مساعدة جديد
+        </button>
+      </div>
+
+      <div className="section-header">
+        <div className="section-title"><div className="section-bar"></div>أحدث طلباتي</div>
+        <div className="section-action" onClick={onGoCases}>عرض الكل <i className="bi bi-chevron-left"></i></div>
+      </div>
+
+      {cases.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-folder"></i><h3>لا توجد طلبات سابقة</h3><p>يمكنك رفع طلب مساعدة جديد ليتم مراجعته</p></div></div>
+      ) : (
+        <div className="cases-grid">
+          {cases.slice(0,2).map(c=><CaseCard key={c.id} c={c} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CASE CARD
+// ═══════════════════════════════════════
+function CaseCard({c}) {
+  const target = c.targetAmount||c.amountRequired||0;
+  const raised = c.raisedAmount||c.amountRaised||0;
+  const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
+  const firstImg = (c.imageUrls && c.imageUrls.length > 0) ? c.imageUrls[0] : c.imageUrl || c.documentUrl || '';
+
+  const getStatus = (status) => {
+    switch(status) {
+      case 'pending': return <span className="badge badge-medium">قيد المراجعة</span>;
+      case 'approved': 
+      case 'active': return <span className="badge badge-urgent" style={{background:'rgba(16,185,129,0.1)',color:'var(--brand-500)'}}>نشط ويتم الجمع</span>;
+      case 'rejected': return <span className="badge badge-urgent">مرفوض</span>;
+      case 'completed': return <span className="badge badge-status-distributed">مكتمل</span>;
+      default: return <span className="badge badge-cat">{status}</span>;
+    }
+  };
+
+  return (
+    <div className="case-card">
+      <div className="case-card-image" style={{position:'relative', height:140}}>
+        {firstImg ? <img src={firstImg} alt={c.title} /> : (
+          <div className="case-card-image-placeholder"><i className="bi bi-image"></i></div>
+        )}
+        <div className="case-card-overlay"></div>
+        <div className="case-card-badges">
+          <span className="badge badge-cat">{c.category||'عام'}</span>
+        </div>
+      </div>
+      <div className="case-card-body">
+        <div className="case-card-title">{c.title||'بدون عنوان'}</div>
+        <div className="case-card-desc" style={{marginBottom:12}}>{getStatus(c.status)}</div>
+        
+        {c.category==='مالي' && target > 0 && (
+          <div className="case-card-progress">
+            <div className="case-card-progress-labels">
+              <span className="text-brand bold">تم جمع: {fmtNum(raised)} ج.س</span>
+              <span className="text-muted">{pct}%</span>
+            </div>
+            <div className="progress-bar"><div className="progress-fill animated" style={{width:`${pct}%`}}></div></div>
+            <div className="text-xs text-muted" style={{marginTop:4}}>المطلوب: {fmtNum(target)} ج.س</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// MY CASES PAGE
+// ═══════════════════════════════════════
+function MyCasesPage({cases}) {
+  return (
+    <div>
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>سجل طلباتي</div>
+      </div>
+      {cases.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-folder-x"></i><h3>لا توجد طلبات سابقة</h3></div></div>
+      ) : (
+        <div className="cases-grid">
+          {cases.map(c=><CaseCard key={c.id} c={c} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// SUBMIT CASE PAGE
+// ═══════════════════════════════════════
+function SubmitCasePage({user, onSuccess}) {
+  const [saving, setSaving] = useState(false);
+  const [data, setData] = useState({
+    title: '', category: 'مالي', targetAmount: '', location: '', urgencyLevel: 'عادي', description: ''
+  });
+  const [file, setFile] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if(!data.title || !data.description || !data.location) { showToast('error','يرجى إكمال الحقول المطلوبة'); return; }
+    if(data.category === 'مالي' && (!data.targetAmount || isNaN(data.targetAmount))) { showToast('error','يرجى إدخال مبلغ صحيح'); return; }
+    
+    setSaving(true);
+    try {
+      let imageUrl = '';
+      if(file) {
+        const urls = await uploadMultipleToSupabase([file], 'case_documents');
+        if (urls && urls.length > 0) {
+          imageUrl = urls[0];
+        }
+      }
+
+      const caseData = {
+        beneficiaryId: user.uid,
+        createdBy: user.uid,
+        title: data.title,
+        category: data.category,
+        targetAmount: parseFloat(data.targetAmount)||0,
+        amountRequired: parseFloat(data.targetAmount)||0, // compatibility
+        raisedAmount: 0,
+        amountRaised: 0,
+        progress: 0,
+        location: data.location,
+        urgencyLevel: data.urgencyLevel,
+        description: data.description,
+        story: data.description, // compatibility
+        imageUrl: imageUrl,
+        documentUrl: imageUrl,           // backward compat
+        imageUrls: imageUrl ? [imageUrl] : [], // array form for dashboard & app
+        status: 'pending',
+        createdAt: serverTimestamp()
+      };
+      
+      const docRef = await addDoc(collection(db,'cases'), caseData);
+      // Update with its own ID for compatibility
+      // We don't strictly need this, but the Android app does it.
+      await updateDoc(docRef, { id: docRef.id });
+      
+      showToast('success','تم رفع طلبك بنجاح، وهو قيد المراجعة الآن.');
+      onSuccess();
+    } catch(err) {
+      showToast('error', 'خطأ: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{padding:24, maxWidth:600, margin:'0 auto'}}>
+      <h2 style={{fontSize:20,fontWeight:800,marginBottom:20}}><i className="bi bi-file-earmark-plus-fill text-brand"></i> رفع طلب مساعدة جديد</h2>
+      <form onSubmit={handleSubmit}>
+        <div className="form-group">
+          <label className="form-label">عنوان الطلب *</label>
+          <input className="form-input" required value={data.title} onChange={e=>setData({...data,title:e.target.value})} placeholder="مثال: مساعدة في رسوم علاجية" />
+        </div>
+        
+        <div style={{display:'flex',gap:16,marginBottom:16}}>
+          <div className="form-group" style={{flex:1,marginBottom:0}}>
+            <label className="form-label">تصنيف الحالة</label>
+            <select className="form-input" value={data.category} onChange={e=>setData({...data,category:e.target.value})}>
+              <option value="مالي">مالي</option>
+              <option value="طبي">طبي</option>
+              <option value="عيني">عيني</option>
+            </select>
+          </div>
+          <div className="form-group" style={{flex:1,marginBottom:0}}>
+            <label className="form-label">مستوى الأهمية</label>
+            <select className="form-input" value={data.urgencyLevel} onChange={e=>setData({...data,urgencyLevel:e.target.value})}>
+              <option value="عادي">عادي</option>
+              <option value="متوسط">متوسط</option>
+              <option value="عاجل">عاجل</option>
+            </select>
+          </div>
+        </div>
+
+        {data.category === 'مالي' && (
+          <div className="form-group">
+            <label className="form-label">المبلغ المطلوب (ج.س) *</label>
+            <input type="number" className="form-input" required value={data.targetAmount} onChange={e=>setData({...data,targetAmount:e.target.value})} placeholder="مثال: 50000" />
+          </div>
+        )}
+
+        <div className="form-group">
+          <label className="form-label">الموقع / السكن *</label>
+          <input className="form-input" required value={data.location} onChange={e=>setData({...data,location:e.target.value})} placeholder="مثال: الخرطوم، جبرة" />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">وصف الحالة (القصة) *</label>
+          <textarea className="form-input" required rows="4" value={data.description} onChange={e=>setData({...data,description:e.target.value})} placeholder="اشرح حالة الاحتياج بالتفصيل..."></textarea>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">مستند إثبات / صورة للحالة (اختياري)</label>
+          <input type="file" className="form-input" accept="image/*" onChange={e=>setFile(e.target.files[0])} />
+        </div>
+
+        <button type="submit" className="btn btn-primary" style={{width:'100%'}} disabled={saving}>
+          {saving ? <div className="spinner"></div> : 'إرسال الطلب للمراجعة'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// PROFILE PAGE
+// ═══════════════════════════════════════
+function ProfilePage({profile, cases, dark, setDark, user, setProfile}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(profile.name);
+  const [phone, setPhone] = useState(profile.phone || '');
+  const [photoFile, setPhotoFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(()=>{ setName(profile.name); setPhone(profile.phone||''); setPhotoFile(null); },[profile, editing]);
+
+  const saveProfile = async () => {
+    setSaving(true);
+    try {
+      let photoURL = profile.photoURL || '';
+      if (photoFile) {
+        const urls = await uploadMultipleToSupabase([photoFile], 'profile_images');
+        if (urls && urls.length > 0) {
+          photoURL = urls[0];
+        }
+      }
+      await updateDoc(doc(db,'users',user.uid),{ name: name.trim(), phone: phone.trim(), photoURL, updatedAt: serverTimestamp() });
+      setProfile(p=>({...p, name: name.trim(), phone: phone.trim(), photoURL}));
+      setEditing(false);
+      showToast('success','تم حفظ التعديلات بنجاح');
+    } catch(e) { showToast('error','خطأ: '+e.message); }
+    finally { setSaving(false); setPhotoFile(null); }
+  };
+
+  const activeCases = cases ? cases.filter(c => c.status === 'active' || c.status === 'approved' || c.status === 'pending').length : 0;
+  const completedCases = cases ? cases.filter(c => c.status === 'completed' || c.status === 'تم الاستلام' || c.status === 'تم التوزيع').length : 0;
+
+  return (
+    <div>
+      {/* Header Card */}
+      <div className="profile-header-card">
+        <div style={{display:'flex',alignItems:'center',gap:16,position:'relative',zIndex:1}}>
+          <div className="profile-avatar">
+            {profile.photoURL ? <img src={profile.photoURL} alt="Profile" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} /> : ini(profile.name)}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name||'مستفيد'}</div>
+            <div style={{fontSize:13,color:'rgba(255,255,255,0.7)',marginTop:2}}>{profile.email}</div>
+            {profile.phone && <div style={{fontSize:13,color:'rgba(255,255,255,0.7)'}}>{profile.phone}</div>}
+          </div>
+          <button className="btn btn-icon" onClick={()=>setEditing(true)} style={{background:'rgba(255,255,255,0.15)',color:'#fff',borderRadius:'50%'}}>
+            <i className="bi bi-pencil-fill"></i>
+          </button>
+        </div>
+        <div className="profile-stats">
+          <div className="profile-stat">
+            <div className="profile-stat-label"><i className="bi bi-folder2-open"></i> طلبات قيد المراجعة أو نشطة</div>
+            <div className="profile-stat-value">{activeCases}</div>
+          </div>
+          <div className="profile-stat">
+            <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> طلبات مكتملة</div>
+            <div className="profile-stat-value">{completedCases}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Settings */}
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:4}}>الإعدادات العامة</div>
+      <div className="settings-group">
+        <div className="settings-item" onClick={()=>setDark(!dark)}>
+          <div className="settings-icon"><i className={`bi ${dark?'bi-moon-fill':'bi-sun-fill'}`}></i></div>
+          <span style={{flex:1,fontWeight:500}}>الوضع الليلي</span>
+          <div className={`toggle ${dark?'active':''}`}></div>
+        </div>
+      </div>
+
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:4}}>خيارات أخرى</div>
+      <div className="settings-group">
+        <div className="settings-item" onClick={()=>setEditing(true)}>
+          <div className="settings-icon"><i className="bi bi-pencil-fill"></i></div>
+          <span style={{flex:1,fontWeight:500}}>تعديل الملف الشخصي</span>
+          <i className="bi bi-chevron-left" style={{color:'var(--text-muted)'}}></i>
+        </div>
+        <div className="settings-item" onClick={logoutDonor}>
+          <div className="settings-icon" style={{background:'rgba(239,68,68,0.1)'}}><i className="bi bi-box-arrow-right" style={{color:'var(--red)'}}></i></div>
+          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>تسجيل الخروج</span>
+        </div>
+      </div>
+
+      {/* Edit Modal */}
+      {editing && (
+        <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)setEditing(false)}}>
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title"><i className="bi bi-pencil-fill" style={{color:'var(--brand-500)'}}></i>تعديل الملف الشخصي</div>
+              <button className="modal-close" onClick={()=>setEditing(false)}><i className="bi bi-x-lg"></i></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group"><label className="form-label">تغيير الصورة الشخصية</label><input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} style={{padding: '8px 12px'}} /></div>
+              <div className="form-group"><label className="form-label">الاسم الكامل</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">رقم الهاتف</label><input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} /></div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={()=>setEditing(false)}>إلغاء</button>
+              <button className="btn btn-primary" style={{width:'auto'}} onClick={saveProfile} disabled={saving}>
+                {saving ? <><div className="spinner"></div>حفظ...</> : 'حفظ التعديلات'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+  <script src="maintenance-check.js?v=2"></script>
+</body>
+</html>

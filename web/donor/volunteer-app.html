@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="تكافل — بوابة المتطوعين | المهام الميدانية والمساعدة">
+  <title>تكافل — بوابة المتطوعين</title>
+  <link rel="icon" type="image/webp" href="../app-icon.webp">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="donor-style.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "firebase-config": "../firebase-config.js",
+      "donor-auth": "./donor-auth.js",
+      "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18/jsx-dev-runtime"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root">
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#07090f">
+    <div style="text-align:center">
+      <div class="spinner" style="width:2.5rem;height:2.5rem;margin:0 auto"></div>
+      <p style="margin-top:16px;color:rgba(255,255,255,0.5);font-family:Tajawal,sans-serif">تحميل بوابة المتطوعين...</p>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container" class="toast-container"></div>
+
+<script type="text/babel" data-type="module">
+import { auth, db } from 'firebase-config';
+import { uploadMultipleToSupabase } from '../supabase-config.js';
+import {
+  collection, query, where, orderBy, onSnapshot,
+  doc, updateDoc, addDoc, serverTimestamp, getDocs, deleteDoc
+} from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
+import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
+
+const { useState, useEffect, useRef } = React;
+
+// ─── HELPERS ───
+const ini = (n='') => (n||'م').trim().split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'م';
+const timeAgo = ts => {
+  if(!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
+  const s = Math.floor((Date.now()-d.getTime())/1000);
+  if(s<60) return 'الآن';
+  if(s<3600) return `منذ ${Math.floor(s/60)} دقيقة`;
+  if(s<86400) return `منذ ${Math.floor(s/3600)} ساعة`;
+  return `منذ ${Math.floor(s/86400)} يوم`;
+};
+const fmtDate = ts => {
+  if(!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
+  return new Intl.DateTimeFormat('ar',{year:'numeric',month:'short',day:'numeric'}).format(d);
+};
+
+function showToast(type, msg) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<i class="bi ${type==='success'?'bi-check-circle-fill':'bi-exclamation-circle-fill'}"></i><span>${msg}</span>`;
+  c.appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3000);
+}
+
+// ═══════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════
+function App() {
+  const [page, setPage] = useState('tasks');
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState({name:'...',email:''});
+  const [tasks, setTasks] = useState([]);
+  const [myTasks, setMyTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  const [chats, setChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [msgIn, setMsgIn] = useState('');
+  
+  const [dark, setDark] = useState(() => {
+    const mode = localStorage.getItem('takaful-theme-mode');
+    return mode === 'light' ? false : true;
+  });
+
+  useEffect(()=>{
+    document.documentElement.setAttribute('data-theme',dark?'dark':'light');
+    localStorage.setItem('takaful-theme-mode',dark?'dark':'light');
+  },[dark]);
+
+  useEffect(()=>{
+    const unsub = requireDonorAuth(async (u, role) => {
+      setUser(u);
+      const p = await getDonorProfile(u.uid);
+      setProfile(p);
+      setLoading(false);
+    });
+    return ()=>unsub&&unsub();
+  },[]);
+
+  // Real-time listener for tasks (Cases assigned to volunteers or available)
+  useEffect(()=>{
+    if(loading||!user) return;
+    const qAll = query(collection(db,'cases'), where('status','in',['approved','assigned','completed']));
+    const unsub = onSnapshot(qAll, s => {
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      
+      // Available tasks (approved and not assigned to anyone yet, AND requires volunteer, e.g. عيني)
+      const available = docs.filter(c => c.status === 'approved' && !c.volunteerId && c.category === 'عيني');
+      
+      // My tasks
+      const mine = docs.filter(c => c.volunteerId === user.uid);
+
+      setTasks(available);
+      setMyTasks(mine);
+    });
+
+    const unsubChats = onSnapshot(query(collection(db,'chats'), where('userId','==',user.uid)), async s => {
+      if(s.empty) {
+        // Auto-create a support chat (matching Android behavior)
+        try {
+          const chatDoc = await addDoc(collection(db,'chats'),{
+            userId: user.uid,
+            userName: profile.name || 'مستخدم',
+            lastMessage: 'مرحباً بك في تكافل! كيف يمكننا مساعدتك؟',
+            lastMessageTime: serverTimestamp(),
+            createdAt: serverTimestamp()
+          });
+          await addDoc(collection(db,'chats',chatDoc.id,'messages'),{
+            sender: 'admin',
+            senderId: 'support',
+            senderName: 'الدعم والمحادثات',
+            text: 'مرحباً بك في تكافل! كيف يمكننا مساعدتك؟',
+            createdAt: serverTimestamp(),
+            isRead: false
+          });
+        } catch(e) { console.error('Error creating support chat:', e); }
+        return;
+      }
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      docs.sort((a,b)=>{
+        const tA = a.lastMessageTime?.toMillis ? a.lastMessageTime.toMillis() : 0;
+        const tB = b.lastMessageTime?.toMillis ? b.lastMessageTime.toMillis() : 0;
+        return tB - tA;
+      });
+      setChats(docs);
+      // Auto-select the first (latest) chat if none selected
+      setActiveChatId(prev => prev || docs[0]?.id || null);
+    });
+
+    return () => { unsub(); unsubChats(); };
+  },[loading, user]);
+
+
+
+  useEffect(()=>{
+    if(!activeChatId) return;
+    const u = onSnapshot(
+      query(collection(db,'chats',activeChatId,'messages'),orderBy('createdAt','asc')),
+      s=>setMsgs(s.docs.map(d=>({id:d.id,...d.data()}))),
+      err => { console.error('Messages listener error:', err); setMsgs([]); }
+    );
+    return ()=>u();
+  },[activeChatId]);
+
+  const sendMsg = async (e) => {
+    e.preventDefault();
+    if(!msgIn.trim()) return;
+    const text = msgIn.trim();
+    setMsgIn('');
+    try {
+      const messageData = {
+        text,
+        sender: 'user',
+        senderId: user.uid,
+        senderName: profile.name || 'مستخدم',
+        senderPhotoUrl: profile.photoURL || '',
+        createdAt: serverTimestamp(),
+        timestamp: Date.now(),
+        isRead: false
+      };
+
+      let chatId = activeChatId;
+      if(!chatId) {
+        const chatDoc = await addDoc(collection(db,'chats'),{
+          userId: user.uid,
+          userName: profile.name || 'مستخدم',
+          lastMessage: text,
+          lastMessageTime: serverTimestamp(),
+          createdAt: serverTimestamp()
+        });
+        chatId = chatDoc.id;
+        await addDoc(collection(db,'chats',chatId,'messages'), messageData);
+        setActiveChatId(chatId);
+      } else {
+        await addDoc(collection(db,'chats',chatId,'messages'), messageData);
+        await updateDoc(doc(db,'chats',chatId),{ lastMessage: text, lastMessageTime: serverTimestamp() });
+      }
+    } catch(err) { showToast('error', err.message); }
+  };
+
+  const doDelMsg = async (chatIdArg, msgId) => {
+    const cid = chatIdArg || activeChatId;
+    if(!cid || !msgId) return;
+    if(!confirm('حذف هذه الرسالة نهائياً؟'))return;
+    try {
+      await deleteDoc(doc(db,'chats',cid,'messages',msgId));
+      showToast('success','تم حذف الرسالة بنجاح');
+    } catch(e) { showToast('error', e.message); }
+  };
+  const doEditMsg = async (chatIdArg, msgId, newText) => {
+    const cid = chatIdArg || activeChatId;
+    if(!cid || !msgId || !newText || !newText.trim()) return;
+    try {
+      await updateDoc(doc(db,'chats',cid,'messages',msgId),{text:newText.trim(), updatedAt:serverTimestamp()});
+      showToast('success','تم تعديل الرسالة بنجاح');
+    } catch(e) { showToast('error', e.message); }
+  };
+
+  if(loading) return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div className="spinner"></div>
+    </div>
+  );
+
+  const NAV = [
+    {id:'tasks',l:'المهام المتاحة',icon:'bi-list-task'},
+    {id:'my-tasks',l:'مهامي',icon:'bi-person-workspace'},
+    {id:'chat',l:'الدعم والمحادثات',icon:'bi-chat-dots-fill'},
+    {id:'profile',l:'حسابي',icon:'bi-person-fill'},
+  ];
+
+  return (
+    <div className="app-layout">
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <img src="../app-icon.webp" alt="تكافل" />
+          </div>
+          <div className="sidebar-brand">
+            <h2>تـكـافـل</h2>
+            <p style={{color:'var(--brand-500)'}}>بوابة المتطوعين</p>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {NAV.map(n=>(
+            <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>setPage(n.id)} role="button">
+              <i className={`bi ${n.icon} nav-icon`}></i>
+              <span style={{flex:1}}>{n.l}</span>
+              {n.id==='tasks' && tasks.length>0 && <span className="nav-badge" style={{background:'var(--brand-500)'}}>{tasks.length}</span>}
+              {n.id==='my-tasks' && myTasks.filter(t=>t.status==='assigned').length>0 && <span className="nav-badge">{myTasks.filter(t=>t.status==='assigned').length}</span>}
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="user-card" style={{flexDirection:'column',gap:10,padding:'14px 16px',alignItems:'flex-start'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,width:'100%'}}>
+              {profile.photoURL
+                ? <img src={profile.photoURL} alt={profile.name} style={{width:40,height:40,borderRadius:'50%',objectFit:'cover',border:'none',flexShrink:0, background:'#FFFFFF'}} />
+                : <div className="avatar" style={{width:40,height:40,fontSize:'15px'}}>{ini(profile.name)}</div>
+              }
+              <div style={{flex:1,minWidth:0}}>
+                <div className="user-name truncate" style={{fontSize:13}}>{profile.name}</div>
+                <div className="user-role truncate" style={{fontSize:11,color:'var(--brand-500)'}}>متطوع ميداني</div>
+              </div>
+            </div>
+            <button onClick={logoutDonor} className="btn btn-outline" style={{width:'100%',padding:'9px 14px',borderRadius:'var(--radius-sm)',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div className="main-content">
+        <header className="topbar">
+          <div style={{flex:1}}>
+            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || 'تكافل'}</div>
+          </div>
+          <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            <button
+              onClick={()=>setDark(d=>!d)}
+              title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
+              style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(30,30,60,0.9)':'rgba(255,200,50,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.2)':'rgba(249,168,37,0.35)',cursor:'pointer',transition:'all 0.35s ease',gap:2,minWidth:70}}
+            >
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14}}>☀️</span>
+              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.8)':'transparent',transition:'all 0.35s ease',fontSize:14}}>🌙</span>
+            </button>
+          </div>
+        </header>
+        <main className="page-content">
+          {profile.status === 'pending_verification' ? (
+            <div className="card" style={{textAlign:'center', padding:'40px 20px', marginTop:'20px'}}>
+              <i className="bi bi-shield-lock-fill" style={{fontSize:48, color:'var(--brand-500)', marginBottom:16, display:'block'}}></i>
+              <h3>حسابك قيد المراجعة</h3>
+              <p style={{color:'var(--text-secondary)', marginTop:8}}>
+                لقد استلمنا طلب تسجيلك والمرفقات الخاصة بإثبات الهوية.<br/>
+                سيقوم مدير النظام بمراجعة الطلب والموافقة عليه قريباً. يرجى التحلي بالصبر.
+              </p>
+            </div>
+          ) : (
+            <>
+              {page==='tasks' && <TasksPage tasks={tasks} user={user} onAccept={()=>setPage('my-tasks')} />}
+              {page==='my-tasks' && <MyTasksPage tasks={myTasks} />}
+              {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} />}
+              {page==='profile' && <ProfilePage profile={profile} tasks={myTasks} dark={dark} setDark={setDark} user={user} setProfile={setProfile} />}
+            </>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// TASKS PAGE
+// ═══════════════════════════════════════
+function TasksPage({tasks, user, onAccept}) {
+  const handleAccept = async (taskId) => {
+    if(!confirm('هل أنت متأكد من قبولك لهذه المهمة الميدانية؟')) return;
+    try {
+      await updateDoc(doc(db,'cases',taskId), {
+        volunteerId: user.uid,
+        status: 'assigned',
+        assignedAt: serverTimestamp()
+      });
+      showToast('success', 'تم قبول المهمة بنجاح، انتقل لمهامي للتفاصيل.');
+      onAccept();
+    } catch(err) {
+      showToast('error', 'خطأ: ' + err.message);
+    }
+  };
+
+  return (
+    <div>
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>المهام الميدانية المتاحة</div>
+      </div>
+      <div style={{marginBottom:16, color:'var(--text-secondary)', fontSize:14}}>
+        <i className="bi bi-info-circle text-brand me-1"></i> المهام المعروضة هنا هي لتوصيل المساعدات العينية للمستفيدين أو الزيارات الميدانية.
+      </div>
+      
+      {tasks.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-emoji-smile text-brand"></i><h3>لا توجد مهام متاحة حالياً</h3><p>يرجى العودة لاحقاً لاكتشاف حالات جديدة.</p></div></div>
+      ) : (
+        <div className="cases-grid">
+          {tasks.map(t=>(
+            <div key={t.id} className="case-card" style={{display:'flex',flexDirection:'column'}}>
+              <div className="case-card-body" style={{flex:1}}>
+                <div className="case-card-title">{t.title}</div>
+                <div className="case-card-desc" style={{marginBottom:12}}>{t.description}</div>
+                
+                <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:13,color:'var(--text-secondary)'}}>
+                  <div><i className="bi bi-geo-alt-fill text-brand"></i> الموقع: {t.location}</div>
+                  <div><i className="bi bi-calendar-event text-brand"></i> تمت الإضافة: {fmtDate(t.createdAt)}</div>
+                </div>
+              </div>
+              <div style={{padding:'16px', borderTop:'1px solid var(--border)'}}>
+                <button className="btn btn-primary" style={{width:'100%',borderRadius:'50px'}} onClick={()=>handleAccept(t.id)}>
+                  <i className="bi bi-check2-circle"></i> قبول المهمة
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// MY TASKS PAGE
+// ═══════════════════════════════════════
+function MyTasksPage({tasks}) {
+  const [completingTask, setCompletingTask] = useState(null);
+
+  const activeTasks = tasks.filter(t=>t.status==='assigned');
+  const completedTasks = tasks.filter(t=>t.status==='completed');
+
+  return (
+    <div>
+      {completingTask && <CompleteTaskModal task={completingTask} onClose={()=>setCompletingTask(null)} />}
+
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>المهام الحالية ({activeTasks.length})</div>
+      </div>
+      {activeTasks.length === 0 ? (
+        <div className="card" style={{marginBottom:24}}><div className="empty-state"><i className="bi bi-check-all text-brand"></i><h3>ليس لديك مهام قيد التنفيذ</h3></div></div>
+      ) : (
+        <div className="cases-grid" style={{marginBottom:24}}>
+          {activeTasks.map(t=>(
+            <div key={t.id} className="case-card" style={{border:'1px solid var(--brand-500)',boxShadow:'0 4px 12px rgba(232,80,10,0.1)'}}>
+              <div className="case-card-body">
+                <span className="badge badge-urgent" style={{background:'var(--brand-500)',color:'#fff',marginBottom:10,display:'inline-block'}}>قيد التنفيذ</span>
+                <div className="case-card-title">{t.title}</div>
+                <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>
+                  <div><i className="bi bi-geo-alt-fill text-brand"></i> الموقع: {t.location}</div>
+                  <div><i className="bi bi-info-circle text-brand"></i> التفاصيل: {t.description}</div>
+                </div>
+                <button className="btn btn-approve" style={{width:'100%',borderRadius:'50px'}} onClick={()=>setCompletingTask(t)}>
+                  <i className="bi bi-clipboard-check"></i> إكمال المهمة
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>المهام المنجزة ({completedTasks.length})</div>
+      </div>
+      {completedTasks.length === 0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-clock-history"></i><h3>لا يوجد سجل مهام منجزة</h3></div></div>
+      ) : (
+        <div className="cases-grid">
+          {completedTasks.map(t=>(
+            <div key={t.id} className="case-card" style={{opacity:0.8}}>
+              <div className="case-card-body">
+                <span className="badge badge-status-distributed" style={{marginBottom:10,display:'inline-block'}}>مكتملة</span>
+                <div className="case-card-title">{t.title}</div>
+                <div style={{fontSize:13,color:'var(--text-secondary)'}}>أُنجزت في: {fmtDate(t.completedAt)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// COMPLETE TASK MODAL
+// ═══════════════════════════════════════
+function CompleteTaskModal({task, onClose}) {
+  const [file, setFile] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleComplete = async (e) => {
+    e.preventDefault();
+    if(!file) {
+      showToast('error','يرجى إرفاق صورة كإثبات لإنجاز المهمة (مثل صورة التسليم).');
+      return;
+    }
+    setSaving(true);
+    try {
+      const urls = await uploadMultipleToSupabase([file], 'task_proofs');
+      const proofUrl = (urls && urls.length > 0) ? urls[0] : '';
+      
+      await updateDoc(doc(db,'cases',task.id), {
+        status: 'completed',
+        completedAt: serverTimestamp(),
+        proofUrl: proofUrl,
+        volunteerNotes: notes
+      });
+      showToast('success', 'شكراً لجهودك! تم إكمال المهمة بنجاح.');
+      onClose();
+    } catch(err) {
+      showToast('error', 'خطأ: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}} style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(4px)'}}>
+      <div className="card" style={{width:'100%',maxWidth:450,padding:24,position:'relative'}}>
+        <button onClick={onClose} style={{position:'absolute',top:16,left:16,background:'transparent',border:'none',color:'var(--text-muted)',fontSize:20,cursor:'pointer'}}><i className="bi bi-x-lg"></i></button>
+        <h3 style={{fontSize:18,fontWeight:800,marginBottom:20}}><i className="bi bi-check-circle-fill text-brand me-2"></i> إكمال المهمة</h3>
+        
+        <div style={{marginBottom:16,padding:12,background:'var(--bg-glass)',borderRadius:8,border:'1px solid var(--border)'}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{task.title}</div>
+          <div style={{fontSize:12,color:'var(--text-secondary)'}}><i className="bi bi-geo-alt-fill text-brand"></i> {task.location}</div>
+        </div>
+
+        <form onSubmit={handleComplete}>
+          <div className="form-group">
+            <label className="form-label">صورة إثبات الإنجاز (التسليم) *</label>
+            <input type="file" className="form-input" required accept="image/*" onChange={e=>setFile(e.target.files[0])} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">ملاحظات (اختياري)</label>
+            <textarea className="form-input" rows="3" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="أي ملاحظات حول تنفيذ المهمة..."></textarea>
+          </div>
+          <button type="submit" className="btn btn-primary" style={{width:'100%',borderRadius:'50px'}} disabled={saving}>
+            {saving ? <div className="spinner-border spinner-border-sm"></div> : 'تأكيد الإنجاز'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CHAT PAGE
+// ═══════════════════════════════════════
+function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, sendMsg, profile, doDelMsg, doEditMsg, user}) {
+  const msgsEnd = useRef(null);
+  const [editingMsg, setEditingMsg] = useState(null);
+  useEffect(()=>{ msgsEnd.current?.scrollIntoView({behavior:'smooth'}); },[msgs]);
+
+  const currentUid = user?.uid || '';
+
+  return (
+    <div>
+      <div className="section-header" style={{marginBottom:20}}>
+        <div className="section-title"><div className="section-bar"></div>الدعم والمحادثات</div>
+      </div>
+      <div className="chat-container">
+        <div className="chat-messages">
+          <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',fontWeight:700,display:'flex',alignItems:'center',gap:10}}>
+            <i className="bi bi-headset" style={{color:'var(--brand-500)'}}></i>
+            محادثة الدعم والإدارة
+            {activeChatId && <span className="text-xs text-muted" style={{marginRight:'auto',fontWeight:400}}>متصل</span>}
+          </div>
+          <div className="chat-messages-body">
+            {!activeChatId && msgs.length === 0 && (
+              <div className="empty-state" style={{padding:40}}>
+                <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
+                <h3>جارٍ تحميل المحادثة...</h3>
+                <p>يتم إنشاء محادثة الدعم الخاصة بك</p>
+                <div className="spinner" style={{width:'2rem',height:'2rem',margin:'16px auto'}}></div>
+              </div>
+            )}
+            {activeChatId && msgs.length === 0 && (
+              <div className="empty-state" style={{padding:40}}>
+                <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
+                <h3>ابدأ محادثة جديدة</h3>
+                <p>الإدارة جاهزة للرد على استفساراتك</p>
+              </div>
+            )}
+            {msgs.map(m=>{
+              const isMine = m.sender==='user' || m.senderId === currentUid;
+              const photoUrl = m.senderPhotoUrl || m.photoUrl || '';
+              const senderDisplayName = m.senderName || (isMine ? profile.name : 'الدعم');
+              return (
+              <div key={m.id} className={`chat-bubble ${isMine?'mine':'theirs'}`} style={{position:'relative'}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                  {photoUrl ? (
+                    <img src={photoUrl} alt={senderDisplayName} style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid rgba(255,255,255,0.2)',background:'#fff'}} />
+                  ) : (
+                    <div style={{width:28,height:28,borderRadius:'50%',background:isMine?'rgba(255,255,255,0.2)':'rgba(232,80,10,0.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:isMine?'rgba(255,255,255,0.8)':'var(--brand-500)',flexShrink:0}}>
+                      {isMine ? ini(profile.name) : <i className="bi bi-headset" style={{fontSize:13}}></i>}
+                    </div>
+                  )}
+                  <span className="text-xs" style={{opacity:.7,fontWeight:600}}>{senderDisplayName}</span>
+                  {m.createdAt && <span className="text-xs" style={{opacity:.4,marginRight:'auto'}}>{timeAgo(m.createdAt)}</span>}
+                </div>
+                {editingMsg?.id === m.id ? (
+                  <div style={{marginTop:8}}>
+                    <input className="form-input mb-2" autoFocus style={{fontSize:'13px', padding:'6px', color:'#000'}} value={editingMsg.text} onChange={e=>setEditingMsg({...editingMsg, text:e.target.value})} onKeyDown={e=>{if(e.key==='Enter'){doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}} />
+                    <div className="d-flex gap-2 justify-content-end">
+                      <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>إلغاء</button>
+                      <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>حفظ</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{paddingRight:36}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>(معدل)</span>}</div>
+                )}
+                
+                {isMine && !editingMsg && (
+                  <div style={{position:'absolute', top:8, left: 8, display:'flex', gap:6, opacity:0.6, transition:'opacity 0.2s'}}>
+                    <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title="تعديل"><i className="bi bi-pencil"></i></button>
+                    <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title="حذف"><i className="bi bi-trash"></i></button>
+                  </div>
+                )}
+              </div>
+            )})}
+            <div ref={msgsEnd}></div>
+          </div>
+          <form className="chat-input-bar" onSubmit={sendMsg}>
+            <input className="chat-input" value={msgIn} onChange={e=>setMsgIn(e.target.value)} placeholder="اكتب رسالتك للإدارة..." disabled={!activeChatId} />
+            <button type="submit" className="chat-send-btn" disabled={!activeChatId}><i className="bi bi-send-fill"></i></button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// PROFILE PAGE
+// ═══════════════════════════════════════
+function ProfilePage({profile, tasks, dark, setDark, user, setProfile}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(profile.name);
+  const [phone, setPhone] = useState(profile.phone || '');
+  const [photoFile, setPhotoFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(()=>{ setName(profile.name); setPhone(profile.phone||''); setPhotoFile(null); },[profile, editing]);
+
+  const saveProfile = async () => {
+    setSaving(true);
+    try {
+      let photoURL = profile.photoURL || '';
+      if (photoFile) {
+        const urls = await uploadMultipleToSupabase([photoFile], 'profile_images');
+        if (urls && urls.length > 0) {
+          photoURL = urls[0];
+        }
+      }
+      await updateDoc(doc(db,'users',user.uid),{ name: name.trim(), phone: phone.trim(), photoURL, updatedAt: serverTimestamp() });
+      setProfile(p=>({...p, name: name.trim(), phone: phone.trim(), photoURL}));
+      setEditing(false);
+      showToast('success','تم حفظ التعديلات بنجاح');
+    } catch(e) { showToast('error','خطأ: '+e.message); }
+    finally { setSaving(false); setPhotoFile(null); }
+  };
+
+  const activeTasks = tasks ? tasks.filter(t => t.status === 'assigned').length : 0;
+  const completedTasks = tasks ? tasks.filter(t => t.status === 'completed').length : 0;
+
+  return (
+    <div>
+      {/* Header Card */}
+      <div className="profile-header-card">
+        <div style={{display:'flex',alignItems:'center',gap:16,position:'relative',zIndex:1}}>
+          <div className="profile-avatar">
+            {profile.photoURL ? <img src={profile.photoURL} alt="Profile" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} /> : ini(profile.name)}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name||'متطوع'}</div>
+            <div style={{fontSize:13,color:'rgba(255,255,255,0.7)',marginTop:2}}>{profile.email}</div>
+            {profile.phone && <div style={{fontSize:13,color:'rgba(255,255,255,0.7)'}}>{profile.phone}</div>}
+          </div>
+          <button className="btn btn-icon" onClick={()=>setEditing(true)} style={{background:'rgba(255,255,255,0.15)',color:'#fff',borderRadius:'50%'}}>
+            <i className="bi bi-pencil-fill"></i>
+          </button>
+        </div>
+        <div className="profile-stats">
+          <div className="profile-stat">
+            <div className="profile-stat-label"><i className="bi bi-person-workspace"></i> مهام قيد التنفيذ</div>
+            <div className="profile-stat-value">{activeTasks}</div>
+          </div>
+          <div className="profile-stat">
+            <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> مهام مكتملة</div>
+            <div className="profile-stat-value">{completedTasks}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Settings */}
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:4}}>الإعدادات العامة</div>
+      <div className="settings-group">
+        <div className="settings-item" onClick={()=>setDark(!dark)}>
+          <div className="settings-icon"><i className={`bi ${dark?'bi-moon-fill':'bi-sun-fill'}`}></i></div>
+          <span style={{flex:1,fontWeight:500}}>الوضع الليلي</span>
+          <div className={`toggle ${dark?'active':''}`}></div>
+        </div>
+      </div>
+
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:4}}>خيارات أخرى</div>
+      <div className="settings-group">
+        <div className="settings-item" onClick={()=>setEditing(true)}>
+          <div className="settings-icon"><i className="bi bi-pencil-fill"></i></div>
+          <span style={{flex:1,fontWeight:500}}>تعديل الملف الشخصي</span>
+          <i className="bi bi-chevron-left" style={{color:'var(--text-muted)'}}></i>
+        </div>
+        <div className="settings-item" onClick={logoutDonor}>
+          <div className="settings-icon" style={{background:'rgba(239,68,68,0.1)'}}><i className="bi bi-box-arrow-right" style={{color:'var(--red)'}}></i></div>
+          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>تسجيل الخروج</span>
+        </div>
+      </div>
+
+      {/* Edit Modal */}
+      {editing && (
+        <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)setEditing(false)}}>
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title"><i className="bi bi-pencil-fill" style={{color:'var(--brand-500)'}}></i>تعديل الملف الشخصي</div>
+              <button className="modal-close" onClick={()=>setEditing(false)}><i className="bi bi-x-lg"></i></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">الصورة الشخصية</label>
+                {profile.photoURL && (
+                  <div style={{marginBottom:10,display:'flex',alignItems:'center',gap:12}}>
+                    <img src={profile.photoURL} alt="Current" style={{width:50,height:50,borderRadius:8,objectFit:'cover',border:'1px solid var(--border)'}} />
+                    <span style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>الصورة الحالية</span>
+                  </div>
+                )}
+                <input type="file" className="form-input" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} />
+                <div style={{fontSize:'.65rem',color:'var(--text-secondary)',marginTop:4}}>اختر صورة جديدة لتغيير صورتك الحالية</div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">الاسم الكامل *</label>
+                <input type="text" className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="الاسم الكامل" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">رقم الهاتف</label>
+                <input type="tel" className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="رقم الهاتف" dir="ltr" style={{textAlign:'right'}} />
+              </div>
+            </div>
+            <div className="modal-footer" style={{borderTop:'1px solid var(--border)',padding:16,display:'flex',gap:12}}>
+              <button className="btn btn-outline" style={{flex:1}} onClick={()=>setEditing(false)}>إلغاء</button>
+              <button className="btn btn-primary" style={{flex:1}} onClick={saveProfile} disabled={saving}>
+                {saving ? <div className="spinner" style={{width:20,height:20}}></div> : 'حفظ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+  <script src="maintenance-check.js?v=2"></script>
+</body>
+</html>

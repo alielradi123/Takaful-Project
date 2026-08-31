@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="تكافل — بوابة المستخدمين | تسجيل الدخول أو إنشاء حساب جديد">
+  <title>تكافل — بوابة المستخدمين</title>
+  <link rel="icon" type="image/webp" href="../app-icon.webp">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="donor-style.css">
+  <style>
+    /* ── Multi-Step Progress Bar ── */
+    .step-progress {
+      display: flex; align-items: center; gap: 0; margin-bottom: 28px; position: relative;
+    }
+    .step-item {
+      flex: 1; display: flex; flex-direction: column; align-items: center; position: relative;
+    }
+    .step-item:not(:last-child)::after {
+      content: ''; position: absolute; top: 16px; left: -50%; width: 100%;
+      height: 2px; background: var(--border); z-index: 0;
+      transition: background 0.4s;
+    }
+    .step-item.done:not(:last-child)::after { background: var(--brand-500); }
+    .step-circle {
+      width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700; background: var(--bg-card);
+      color: var(--text-muted); z-index: 1; position: relative;
+      transition: all 0.3s;
+    }
+    .step-item.active .step-circle {
+      border-color: var(--brand-500); color: var(--brand-500);
+      box-shadow: 0 0 0 4px rgba(16,185,129,0.15);
+    }
+    .step-item.done .step-circle {
+      background: var(--brand-500); border-color: var(--brand-500); color: #fff;
+    }
+    .step-label {
+      font-size: 11px; margin-top: 6px; color: var(--text-muted); font-weight: 600;
+      white-space: nowrap;
+    }
+    .step-item.active .step-label { color: var(--brand-400); }
+
+    /* ── Doc type cards ── */
+    .doc-type-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px;
+    }
+    .doc-type-card {
+      border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+      padding: 14px 10px; cursor: pointer; text-align: center;
+      transition: all 0.25s; background: var(--bg-input);
+    }
+    .doc-type-card:hover { border-color: var(--brand-500); background: rgba(16,185,129,0.05); }
+    .doc-type-card.selected {
+      border-color: var(--brand-500); background: rgba(16,185,129,0.1);
+      box-shadow: 0 0 0 3px rgba(16,185,129,0.12);
+    }
+    .doc-type-card i { font-size: 22px; display: block; margin-bottom: 6px; color: var(--brand-400); }
+    .doc-type-card span { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+
+    /* ── Upload zone ── */
+    .upload-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius-sm);
+      padding: 20px; text-align: center; cursor: pointer;
+      transition: all 0.25s; background: var(--bg-input); position: relative;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--brand-500); background: rgba(16,185,129,0.05);
+    }
+    .upload-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .upload-zone i { font-size: 28px; color: var(--brand-400); display: block; margin-bottom: 8px; }
+    .upload-zone .upload-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+    .upload-zone .upload-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+    .upload-preview {
+      width: 100%; height: 120px; object-fit: cover;
+      border-radius: var(--radius-sm); display: none; margin-top: 10px;
+      border: 1px solid var(--border);
+    }
+
+    /* ── Pending banner ── */
+    .pending-banner {
+      background: rgba(249,168,37,0.12); border: 1px solid rgba(249,168,37,0.3);
+      border-radius: var(--radius-sm); padding: 14px 16px;
+      display: flex; align-items: flex-start; gap: 12px;
+    }
+    .pending-banner i { font-size: 20px; color: var(--gold-500); flex-shrink: 0; margin-top: 2px; }
+    .pending-banner p { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.6; }
+
+    /* ── Form step panels ── */
+    .form-step { display: none; animation: fadeIn 0.3s ease; }
+    .form-step.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div class="auth-page">
+    <button id="theme-toggle" aria-label="تبديل الوضع" style="display:flex;align-items:center;padding:5px 6px;border-radius:50px;background:rgba(255,200,50,0.15);border:1px solid rgba(249,168,37,0.35);cursor:pointer;transition:all 0.35s ease;gap:2;min-width:70px;position:absolute;top:20px;left:20px;z-index:10;backdrop-filter:blur(10px)">
+      <span id="theme-icon-sun" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#F9A825;transition:all 0.35s ease;font-size:14px;box-shadow:0 2px 8px rgba(249,168,37,0.5)">☀️</span>
+      <span id="theme-icon-moon" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:transparent;transition:all 0.35s ease;font-size:14px;box-shadow:none">🌙</span>
+    </button>
+
+    <div class="auth-bg-circles">
+      <span></span><span></span><span></span>
+    </div>
+
+    <div class="auth-card">
+      <!-- Right Panel (Forms) -->
+      <div class="auth-right-panel" style="width: 100%;">
+        <div class="auth-logo" style="margin-bottom:24px;">
+          <div class="auth-logo-icon" style="background:#FFFFFF; border:none;">
+            <img src="../app-icon.webp" alt="Takaful Logo" style="filter: drop-shadow(0px 4px 12px rgba(232, 80, 10, 0.4));">
+          </div>
+          <h1 style="font-size: 24px;">تـكـافـل</h1>
+          <p style="font-size: 13px;">نبض العطاء وإشراقة الأمل</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="auth-tabs" id="auth-tabs">
+          <div class="auth-tab active" data-tab="login">تسجيل الدخول</div>
+          <div class="auth-tab" data-tab="register">حساب جديد</div>
+        </div>
+
+      <!-- Error -->
+      <div id="error-box" class="error-box hidden">
+        <span>⚠️</span>
+        <span id="error-text"></span>
+      </div>
+
+      <!-- ═══ LOGIN FORM ═══ -->
+      <form id="login-form">
+        <div class="form-group">
+          <label class="form-label" for="login-email">البريد الإلكتروني</label>
+          <div class="input-group">
+            <span class="input-icon"><i class="bi bi-envelope-fill"></i></span>
+            <input id="login-email" type="email" class="form-input" placeholder="email@example.com" autocomplete="email" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="login-password">كلمة المرور</label>
+          <div class="input-group">
+            <span class="input-icon" style="right: 14px;"><i class="bi bi-lock-fill"></i></span>
+            <input id="login-password" type="password" class="form-input" placeholder="••••••••" autocomplete="current-password" style="padding-left: 40px;" required>
+            <span class="password-toggle" onclick="togglePassword('login-password', this)" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); cursor: pointer; z-index: 10;"><i class="bi bi-eye"></i></span>
+          </div>
+        </div>
+        <div class="form-group" style="display:flex; justify-content:space-between; align-items:center; margin-top:-10px; margin-bottom:18px;">
+          <a href="recovery.html" style="color:var(--brand-500); font-size:13px; font-weight:600; text-decoration:none;">نسيت كلمة المرور؟</a>
+        </div>
+        <button type="submit" class="btn btn-primary" id="login-btn" style="border-radius:50px;">
+          <span id="login-btn-text">تسجيل الدخول</span>
+        </button>
+        <div class="auth-divider">أو</div>
+        <button type="button" class="btn btn-google" id="google-login-btn" style="border-radius:50px;">
+          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:20px; height:20px; margin-left:8px;"> المتابعة باستخدام جوجل
+        </button>
+      </form>
+
+      <!-- ═══ REGISTER FORM — MULTI-STEP ═══ -->
+      <form id="register-form" class="hidden" onsubmit="return false;">
+
+        <!-- STEP PROGRESS (smart visibility) -->
+        <div id="step-progress" class="step-progress" style="display:none; margin: 10px 0 24px 0;">
+          <div class="step-item active" id="sp-1">
+            <div class="step-circle">1</div>
+            <div class="step-label">البيانات الأساسية</div>
+          </div>
+          <div class="step-item" id="sp-2">
+            <div class="step-circle">2</div>
+            <div class="step-label">إثبات الهوية</div>
+          </div>
+        </div>
+
+        <!-- ── STEP 1: Basic Info ── -->
+        <div class="form-step active" id="step-1">
+          <!-- Role Selector -->
+          <div class="form-group" style="margin-bottom:20px;">
+            <label class="form-label">نوع الحساب</label>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
+              <label class="payment-option selected" id="role-donor-lbl" style="cursor:pointer;padding:12px 8px;text-align:center;">
+                <input type="radio" name="reg-role" value="donor" checked style="display:none;">
+                <i class="bi bi-heart-fill" style="color:var(--brand-500);font-size:18px;display:block;margin-bottom:4px;"></i>
+                <span style="font-size:12px;font-weight:700;">متبرع</span>
+              </label>
+              <label class="payment-option" id="role-beneficiary-lbl" style="cursor:pointer;padding:12px 8px;text-align:center;">
+                <input type="radio" name="reg-role" value="beneficiary" style="display:none;">
+                <i class="bi bi-person-hearts" style="color:var(--gold-500);font-size:18px;display:block;margin-bottom:4px;"></i>
+                <span style="font-size:12px;font-weight:700;">مستفيد</span>
+              </label>
+              <label class="payment-option" id="role-volunteer-lbl" style="cursor:pointer;padding:12px 8px;text-align:center;">
+                <input type="radio" name="reg-role" value="volunteer" style="display:none;">
+                <i class="bi bi-people-fill" style="color:#60a5fa;font-size:18px;display:block;margin-bottom:4px;"></i>
+                <span style="font-size:12px;font-weight:700;">متطوع</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Basic Fields Grid -->
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label" for="reg-name">الاسم الكامل *</label>
+              <div class="input-group">
+                <span class="input-icon"><i class="bi bi-person-fill"></i></span>
+                <input id="reg-name" type="text" class="form-input" placeholder="محمد أحمد" autocomplete="name" required>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="reg-email">البريد الإلكتروني *</label>
+              <div class="input-group">
+                <span class="input-icon"><i class="bi bi-envelope-fill"></i></span>
+                <input id="reg-email" type="email" class="form-input" placeholder="email@example.com" autocomplete="email" required>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="reg-phone">رقم الهاتف</label>
+              <div class="input-group">
+                <span class="input-icon"><i class="bi bi-telephone-fill"></i></span>
+                <input id="reg-phone" type="tel" class="form-input" placeholder="0912345678" autocomplete="tel">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="reg-password">كلمة المرور *</label>
+              <div class="input-group">
+              <span class="input-icon" style="right: 14px;"><i class="bi bi-lock-fill"></i></span>
+              <input id="reg-password" type="password" class="form-input" placeholder="••••••••" style="padding-left: 40px;" autocomplete="new-password" required minlength="6">
+              <span class="password-toggle" onclick="togglePassword('reg-password', this)" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); cursor: pointer; z-index: 10;"><i class="bi bi-eye"></i></span>
+            </div>
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label" for="reg-photo">الصورة الشخصية (اختياري)</label>
+              <div class="upload-zone" style="padding:15px;">
+                <input type="file" id="reg-photo" accept="image/*" onchange="previewPhoto(this,'photo-preview')">
+                <i class="bi bi-camera-fill" style="font-size:24px; margin-bottom:4px;"></i>
+                <div class="upload-label">انقر لرفع صورة شخصية</div>
+              </div>
+              <img id="photo-preview" class="upload-preview" alt="معاينة">
+            </div>
+          </div>
+
+          <button type="button" class="btn btn-primary" id="step1-next-btn" onclick="handleStep1Next()" style="border-radius:50px; width:100%;">
+            <span id="step1-btn-text">متابعة</span>
+            <i class="bi bi-arrow-left"></i>
+          </button>
+
+          <div class="auth-divider">أو</div>
+          <button type="button" class="btn btn-google" id="google-register-btn" style="border-radius:50px;">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:20px; height:20px; margin-left:8px;"> المتابعة باستخدام جوجل
+          </button>
+        </div>
+
+        <!-- ── STEP 2: Identity Verification (beneficiary / volunteer only) ── -->
+        <div class="form-step" id="step-2">
+          <div class="pending-banner" style="margin-bottom:20px;">
+            <i class="bi bi-shield-check"></i>
+            <div>
+              <p><strong>التحقق من الهوية مطلوب</strong></p>
+              <p>لحماية مجتمع تكافل، يرجى رفع وثيقة هوية سارية. سيتم مراجعة طلبك خلال 24 ساعة.</p>
+            </div>
+          </div>
+
+          <!-- Doc type -->
+          <div class="form-group">
+            <label class="form-label">نوع وثيقة الهوية *</label>
+            <div class="doc-type-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+              <div class="doc-type-card selected" data-doc="national_number" onclick="selectDocType(this)">
+                <i class="bi bi-file-person-fill"></i>
+                <span>رقم وطني</span>
+              </div>
+              <div class="doc-type-card" data-doc="national_id" onclick="selectDocType(this)">
+                <i class="bi bi-credit-card-2-front-fill"></i>
+                <span>بطاقة قومية</span>
+              </div>
+              <div class="doc-type-card" data-doc="passport" onclick="selectDocType(this)">
+                <i class="bi bi-passport-fill"></i>
+                <span>جواز سفر</span>
+              </div>
+            </div>
+            <input type="hidden" id="doc-type" value="national_number">
+          </div>
+
+          <!-- Doc number + country -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label" for="doc-number">رقم الوثيقة *</label>
+              <div class="input-group">
+                <span class="input-icon"><i class="bi bi-123"></i></span>
+                <input id="doc-number" type="text" class="form-input" placeholder="12345678">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="doc-country">البلد / المحافظة</label>
+              <div class="input-group">
+                <span class="input-icon"><i class="bi bi-geo-alt-fill"></i></span>
+                <input id="doc-country" type="text" class="form-input" placeholder="الخرطوم">
+              </div>
+            </div>
+          </div>
+
+          <!-- Doc expiry -->
+          <div class="form-group">
+            <label class="form-label" for="doc-expiry">تاريخ انتهاء الوثيقة (اختياري)</label>
+            <div class="input-group">
+              <span class="input-icon"><i class="bi bi-calendar3"></i></span>
+              <input id="doc-expiry" type="date" class="form-input">
+            </div>
+          </div>
+
+          <!-- Front image -->
+          <div class="form-group">
+            <label class="form-label">صورة الوجه الأمامي للوثيقة *</label>
+            <div class="upload-zone">
+              <input type="file" id="doc-front" accept="image/*" required onchange="previewPhoto(this,'doc-front-preview')">
+              <i class="bi bi-card-image"></i>
+              <div class="upload-label">انقر لرفع الوجه الأمامي</div>
+              <div class="upload-hint">تأكد أن البيانات واضحة وقابلة للقراءة</div>
+            </div>
+            <img id="doc-front-preview" class="upload-preview" alt="معاينة أمامية">
+          </div>
+
+          <!-- Back image -->
+          <div class="form-group" id="doc-back-group" style="display:none;">
+            <label class="form-label">صورة الوجه الخلفي *</label>
+            <div class="upload-zone">
+              <input type="file" id="doc-back" accept="image/*" onchange="previewPhoto(this,'doc-back-preview')">
+              <i class="bi bi-card-image"></i>
+              <div class="upload-label">انقر لرفع الوجه الخلفي</div>
+              <div class="upload-hint">تأكد أن البيانات واضحة</div>
+            </div>
+            <img id="doc-back-preview" class="upload-preview" alt="معاينة خلفية">
+          </div>
+
+          <!-- Reason / Skills -->
+          <div class="form-group" id="reason-group">
+            <label class="form-label" for="reg-reason" id="reason-label">سبب التسجيل / مهاراتك</label>
+            <textarea id="reg-reason" class="form-input" rows="3"
+              placeholder="اكتب نبذة عن نفسك وسبب تسجيلك في تكافل..."
+              style="resize:vertical;"></textarea>
+          </div>
+
+          <div style="display:flex;gap:12px;">
+            <button type="button" class="btn btn-outline" style="flex:0 0 auto;" onclick="goToStep(1)">
+              <i class="bi bi-arrow-right"></i> رجوع
+            </button>
+            <button type="button" class="btn btn-primary" style="flex:1; border-radius:50px;" id="register-btn" onclick="handleFinalSubmit()">
+              <span id="register-btn-text">إرسال الطلب</span>
+            </button>
+          </div>
+        </div>
+      </form>
+
+      <!-- Footer Removed -->
+
+      </div> <!-- End Right Panel -->
+    </div> <!-- End Auth Card -->
+  </div>
+
+  <!-- Toast -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Google Role Modal -->
+  <div id="google-role-modal" class="hidden" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+    <div class="card" style="width:90%;max-width:420px;padding:28px;text-align:center;">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:36px; height:36px; margin-bottom:12px; display:block; margin-left:auto; margin-right:auto;">
+      <div id="google-role-step-1">
+        <h3 style="margin-bottom:6px;font-weight:800;">إكمال التسجيل</h3>
+        <p class="text-muted text-sm" style="margin-bottom:20px;">حدد نوع حسابك:</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px;">
+          <label class="payment-option selected" id="g-role-donor-lbl" style="cursor:pointer;padding:14px 8px;">
+            <input type="radio" name="g-reg-role" value="donor" checked style="display:none;">
+            <i class="bi bi-heart-fill" style="color:var(--brand-500);font-size:20px;display:block;margin-bottom:4px;"></i>
+            <span style="font-size:13px;font-weight:700;">متبرع</span>
+          </label>
+          <label class="payment-option" id="g-role-beneficiary-lbl" style="cursor:pointer;padding:14px 8px;">
+            <input type="radio" name="g-reg-role" value="beneficiary" style="display:none;">
+            <i class="bi bi-person-hearts" style="color:var(--gold-500);font-size:20px;display:block;margin-bottom:4px;"></i>
+            <span style="font-size:13px;font-weight:700;">مستفيد</span>
+          </label>
+          <label class="payment-option" id="g-role-volunteer-lbl" style="cursor:pointer;padding:14px 8px;">
+            <input type="radio" name="g-reg-role" value="volunteer" style="display:none;">
+            <i class="bi bi-people-fill" style="color:#60a5fa;font-size:20px;display:block;margin-bottom:4px;"></i>
+            <span style="font-size:13px;font-weight:700;">متطوع</span>
+          </label>
+        </div>
+        <button id="google-complete-btn" class="btn btn-primary" style="width:100%; border-radius:50px;">تأكيد ومتابعة</button>
+      </div>
+
+      <div id="google-role-step-2" class="hidden" style="text-align:right;">
+        <h3 style="margin-bottom:6px;font-weight:800;text-align:center;">إثبات الهوية</h3>
+        <p class="text-muted text-sm" style="margin-bottom:20px;text-align:center;">يرجى إرفاق هويتك ليتم التحقق منها</p>
+        
+        <div class="form-group">
+          <label class="form-label">نوع الهوية</label>
+          <select id="g-doc-type" class="form-input" onchange="toggleGoogleBackDoc()">
+            <option value="national_number">رقم وطني</option>
+            <option value="national_id">بطاقة قومية</option>
+            <option value="passport">جواز سفر</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">رقم الهوية / الجواز *</label>
+          <input type="text" id="g-doc-number" class="form-input" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">الوجه الأمامي للوثيقة *</label>
+          <input type="file" id="g-doc-front" class="form-input" accept="image/*" style="padding:8px;" required>
+        </div>
+        <div class="form-group" id="g-doc-back-group" style="display:none;">
+          <label class="form-label">الوجه الخلفي للوثيقة *</label>
+          <input type="file" id="g-doc-back" class="form-input" accept="image/*" style="padding:8px;">
+        </div>
+        <div class="form-group">
+          <label class="form-label" id="g-reason-label">سبب التسجيل / مهاراتك</label>
+          <textarea id="g-reg-reason" class="form-input" rows="2"></textarea>
+        </div>
+        
+        <div style="display:flex;gap:12px;margin-top:20px;">
+          <button id="google-back-btn" class="btn btn-outline" style="flex:1;">رجوع</button>
+          <button id="google-final-btn" class="btn btn-primary" style="flex:1;">إرسال الطلب</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Theme ──
+    (function () {
+      document.documentElement.setAttribute('data-theme','dark');
+      const hour = new Date().getHours();
+      const autoIsDay = hour >= 6 && hour < 18;
+      const saved = localStorage.getItem('takaful-theme-mode');
+      const mode = saved || 'auto';
+      const isDay = (mode === 'auto') ? autoIsDay : (mode === 'light');
+      document.documentElement.setAttribute('data-theme', isDay ? 'light' : 'dark');
+    })();
+
+    const themeToggleBtn = document.getElementById('theme-toggle');
+    const themeIconSun = document.getElementById('theme-icon-sun');
+    const themeIconMoon = document.getElementById('theme-icon-moon');
+    function updateThemeIcon() {
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      
+      themeToggleBtn.style.background = isLight ? 'rgba(255,200,50,0.15)' : 'rgba(30,30,60,0.9)';
+      themeToggleBtn.style.borderColor = isLight ? 'rgba(249,168,37,0.35)' : 'rgba(100,100,255,0.2)';
+      
+      themeIconSun.style.background = isLight ? '#F9A825' : 'transparent';
+      themeIconSun.style.boxShadow = isLight ? '0 2px 8px rgba(249,168,37,0.5)' : 'none';
+      themeIconSun.style.color = isLight ? '#fff' : 'rgba(255,200,50,0.4)';
+      
+      themeIconMoon.style.background = isLight ? 'transparent' : 'rgba(99,102,241,0.8)';
+      themeIconMoon.style.boxShadow = isLight ? 'none' : '0 2px 8px rgba(99,102,241,0.5)';
+      themeIconMoon.style.color = isLight ? 'rgba(99,102,241,0.3)' : '#fff';
+    }
+    updateThemeIcon();
+    themeToggleBtn.addEventListener('click', () => {
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      const newTheme = isLight ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', newTheme);
+      localStorage.setItem('takaful-theme-mode', newTheme);
+      updateThemeIcon();
+    });
+
+    // ── Image Preview ──
+    function previewPhoto(input, previewId) {
+      const preview = document.getElementById(previewId);
+      if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = e => {
+          preview.src = e.target.result;
+          preview.style.display = 'block';
+        };
+        reader.readAsDataURL(input.files[0]);
+      }
+    }
+
+    // ── Password Toggle ──
+    function togglePassword(inputId, iconSpan) {
+      const input = document.getElementById(inputId);
+      const icon = iconSpan.querySelector('i');
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('bi-eye');
+        icon.classList.add('bi-eye-slash');
+        icon.style.color = 'var(--brand-500)';
+      } else {
+        input.type = 'password';
+        icon.classList.remove('bi-eye-slash');
+        icon.classList.add('bi-eye');
+        icon.style.color = 'var(--text-muted)';
+      }
+    }
+
+    // ── Doc Type Selection ──
+    let selectedDocType = 'national_number';
+    function selectDocType(el) {
+      document.querySelectorAll('.doc-type-card').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedDocType = el.dataset.doc;
+      document.getElementById('doc-type').value = selectedDocType;
+
+      const backGroup = document.getElementById('doc-back-group');
+      const backInput = document.getElementById('doc-back');
+      if (selectedDocType === 'national_id') {
+        backGroup.style.display = 'block';
+        backInput.required = true;
+      } else {
+        backGroup.style.display = 'none';
+        backInput.required = false;
+        backInput.value = '';
+        document.getElementById('doc-back-preview').style.display = 'none';
+      }
+    }
+
+    function toggleGoogleBackDoc() {
+      const gDocType = document.getElementById('g-doc-type').value;
+      const gBackGroup = document.getElementById('g-doc-back-group');
+      const gBackInput = document.getElementById('g-doc-back');
+      if (gDocType === 'national_id') {
+        gBackGroup.style.display = 'block';
+        gBackInput.required = true;
+      } else {
+        gBackGroup.style.display = 'none';
+        gBackInput.required = false;
+        gBackInput.value = '';
+      }
+    }
+
+    // ── Multi-Step ──
+    let currentStep = 1;
+    function goToStep(step) {
+      document.querySelectorAll('.form-step').forEach(s => s.classList.remove('active'));
+      document.getElementById(`step-${step}`).classList.add('active');
+      
+      const sp1 = document.getElementById('sp-1');
+      const sp2 = document.getElementById('sp-2');
+      
+      if (step === 2) {
+        sp1.classList.remove('active');
+        sp1.classList.add('done');
+        sp1.querySelector('.step-circle').innerHTML = '<i class="bi bi-check-lg"></i>';
+        sp2.classList.add('active');
+      } else {
+        sp1.classList.add('active');
+        sp1.classList.remove('done');
+        sp1.querySelector('.step-circle').innerHTML = '1';
+        sp2.classList.remove('active');
+      }
+      currentStep = step;
+    }
+
+    // ── Role Radio UI ──
+    const ROLE_LABELS = ['donor','beneficiary','volunteer'];
+    function setupRadios(name, prefix) {
+      document.querySelectorAll(`input[name="${name}"]`).forEach(r => {
+        r.addEventListener('change', e => {
+          ROLE_LABELS.forEach(l => {
+            const lbl = document.getElementById(`${prefix}${l}-lbl`);
+            if (lbl) lbl.classList.remove('selected');
+          });
+          const selected = document.getElementById(`${prefix}${e.target.value}-lbl`);
+          if (selected) selected.classList.add('selected');
+
+          // Smart Step Progress visibility
+          if (name === 'reg-role') {
+            const progress = document.getElementById('step-progress');
+            if (e.target.value === 'donor') {
+              progress.style.display = 'none';
+            } else {
+              progress.style.display = 'flex';
+            }
+
+            const reason = document.getElementById('reg-reason');
+            const reasonLabel = document.getElementById('reason-label');
+            if (e.target.value === 'volunteer') {
+              reasonLabel.textContent = 'مهاراتك وخبراتك التطوعية *';
+              if (reason) reason.placeholder = 'ما هي مهاراتك؟ ما المجالات التي تريد التطوع فيها؟';
+            } else {
+              reasonLabel.textContent = 'سبب التسجيل / احتياجاتك';
+              if (reason) reason.placeholder = 'اكتب نبذة عن نفسك وسبب تسجيلك في تكافل...';
+            }
+          }
+        });
+      });
+    }
+    setupRadios('reg-role', 'role-');
+    setupRadios('g-reg-role', 'g-role-');
+
+    // ── Tab Switching ──
+    const tabs = document.querySelectorAll('.auth-tab');
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        hideError();
+        goToStep(1);
+        if (tab.dataset.tab === 'login') {
+          loginForm.classList.remove('hidden');
+          registerForm.classList.add('hidden');
+        } else {
+          loginForm.classList.add('hidden');
+          registerForm.classList.remove('hidden');
+          // Update progress bar visibility based on current role
+          const role = document.querySelector('input[name="reg-role"]:checked').value;
+          document.getElementById('step-progress').style.display = (role === 'donor') ? 'none' : 'flex';
+        }
+      });
+    });
+
+    function showError(msg) {
+      document.getElementById('error-text').textContent = msg;
+      document.getElementById('error-box').classList.remove('hidden');
+    }
+    function hideError() {
+      document.getElementById('error-box').classList.add('hidden');
+    }
+    function showToast(type, msg) {
+      const c = document.getElementById('toast-container');
+      const t = document.createElement('div');
+      t.className = `toast toast-${type}`;
+      t.innerHTML = `<i class="bi ${type === 'success' ? 'bi-check-circle-fill' : 'bi-exclamation-circle-fill'}"></i><span>${msg}</span>`;
+      c.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    // ── Step 1 → Next ──
+    function handleStep1Next() {
+      hideError();
+      const name = document.getElementById('reg-name').value.trim();
+      const email = document.getElementById('reg-email').value.trim();
+      const password = document.getElementById('reg-password').value;
+      const role = document.querySelector('input[name="reg-role"]:checked').value;
+
+      if (!name || !email || !password) { showError('يرجى ملء الاسم والبريد وكلمة المرور'); return; }
+      if (password.length < 6) { showError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+
+      // Donor/Admin don't need verification
+      if (role === 'donor' || role === 'admin') {
+        handleDirectRegister();
+      } else {
+        // Beneficiary / Volunteer → show step 2
+        goToStep(2);
+        window.scrollTo(0, 0);
+      }
+    }
+
+    // ── Direct Register (donor/admin) ──
+    async function handleDirectRegister() {
+      const btn = document.getElementById('step1-next-btn');
+      const btnText = document.getElementById('step1-btn-text');
+      btn.disabled = true;
+      btnText.textContent = 'جارٍ الإنشاء...';
+      try {
+        const name = document.getElementById('reg-name').value.trim();
+        const email = document.getElementById('reg-email').value.trim();
+        const phone = document.getElementById('reg-phone').value.trim();
+        const password = document.getElementById('reg-password').value;
+        const role = document.querySelector('input[name="reg-role"]:checked').value;
+        const photoFile = document.getElementById('reg-photo').files[0];
+
+        await window._registerDonor(name, email, password, phone, role, photoFile);
+        showToast('success', 'تم إنشاء حسابك بنجاح! مرحباً بك في تكافل 🎉');
+        setTimeout(() => {
+          if (role === 'admin') window.location.href = '../dashboard.html';
+          else window.location.href = 'app.html';
+        }, 800);
+      } catch (err) {
+        let msg = 'حدث خطأ أثناء إنشاء الحساب';
+        if (err.code === 'auth/email-already-in-use') msg = 'هذا البريد مسجّل مسبقاً';
+        else if (err.code === 'auth/weak-password') msg = 'كلمة المرور ضعيفة جداً';
+        else if (err.code === 'auth/invalid-email') msg = 'البريد الإلكتروني غير صالح';
+        else if (err.code === 'auth/network-request-failed') msg = 'فشل الاتصال بالشبكة. يرجى تشغيل VPN وإعادة المحاولة.';
+        else if (err.message) msg = err.message;
+        showError(msg);
+        btn.disabled = false;
+        btnText.textContent = 'متابعة';
+      }
+    }
+
+    // ── Final Submit (beneficiary/volunteer with docs) ──
+    async function handleFinalSubmit() {
+      hideError();
+      const docNumber = document.getElementById('doc-number').value.trim();
+      const docFrontFile = document.getElementById('doc-front').files[0];
+      if (!docNumber) { showError('يرجى إدخال رقم الوثيقة'); return; }
+      if (!docFrontFile) { showError('يرجى رفع صورة الوجه الأمامي للوثيقة'); return; }
+
+      const btn = document.getElementById('register-btn');
+      const btnText = document.getElementById('register-btn-text');
+      btn.disabled = true;
+      btnText.textContent = 'جارٍ رفع الملفات...';
+
+      try {
+        const name = document.getElementById('reg-name').value.trim();
+        const email = document.getElementById('reg-email').value.trim();
+        const phone = document.getElementById('reg-phone').value.trim();
+        const password = document.getElementById('reg-password').value;
+        const role = document.querySelector('input[name="reg-role"]:checked').value;
+        const photoFile = document.getElementById('reg-photo').files[0];
+        const docBackFile = document.getElementById('doc-back').files[0];
+        const docCountry = document.getElementById('doc-country').value.trim();
+        const docExpiry = document.getElementById('doc-expiry').value;
+        const reason = document.getElementById('reg-reason').value.trim();
+
+        const docData = {
+          docType: selectedDocType,
+          docNumber,
+          docCountry,
+          docExpiry,
+          reason,
+          docFrontFile,
+          docBackFile: docBackFile || null,
+        };
+
+        btnText.textContent = 'جارٍ إنشاء الحساب...';
+        await window._registerWithVerification(name, email, password, phone, role, photoFile, docData);
+
+        // Show success with pending notice
+        document.getElementById('register-form').innerHTML = `
+          <div style="text-align:center;padding:20px 0;">
+            <div style="width:64px;height:64px;border-radius:50%;background:rgba(249,168,37,0.15);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+              <i class="bi bi-hourglass-split" style="font-size:28px;color:var(--gold-500);"></i>
+            </div>
+            <h3 style="font-weight:800;margin-bottom:8px;">طلبك قيد المراجعة ✅</h3>
+            <p class="text-muted text-sm" style="line-height:1.7;">
+              تم تسجيل حسابك بنجاح. سيتم مراجعة وثائقك من قِبَل فريق تكافل خلال <strong>24 ساعة</strong>.
+              ستصلك رسالة بريد إلكتروني عند الموافقة على حسابك.
+            </p>
+            <div class="pending-banner" style="margin-top:20px;text-align:right;">
+              <i class="bi bi-info-circle-fill" style="color:var(--brand-400);"></i>
+              <p>يمكنك تسجيل الدخول الآن ولكن بعض الميزات ستكون محدودة حتى اعتماد هويتك.</p>
+            </div>
+          </div>`;
+      } catch (err) {
+        let msg = 'حدث خطأ أثناء إنشاء الحساب';
+        if (err.code === 'auth/email-already-in-use') msg = 'هذا البريد مسجّل مسبقاً';
+        else if (err.code === 'auth/weak-password') msg = 'كلمة المرور ضعيفة جداً';
+        else if (err.code === 'auth/network-request-failed') msg = 'فشل الاتصال بالشبكة. يرجى تشغيل VPN.';
+        else if (err.message) msg = err.message;
+        showError(msg);
+        btn.disabled = false;
+        btnText.textContent = 'إرسال الطلب';
+      }
+    }
+  </script>
+
+  <script type="module">
+    import { loginDonor, registerDonor, registerWithVerification, checkDonorRole, loginWithGoogle, completeGoogleRegistration, completeGoogleRegistrationWithVerification } from './donor-auth.js';
+    import { auth } from '../firebase-config.js';
+    import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js';
+
+    // Expose to global scope for inline handlers
+    window._registerDonor = registerDonor;
+    window._registerWithVerification = registerWithVerification;
+
+    // If already logged in, redirect
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        const roleCheck = await checkDonorRole(user.uid);
+        if (roleCheck === 'admin') window.location.href = '../dashboard.html';
+        else if (roleCheck === 'beneficiary') window.location.href = 'beneficiary-app.html';
+        else if (roleCheck === 'volunteer') window.location.href = 'volunteer-app.html';
+        else if (roleCheck === 'donor') window.location.href = 'app.html';
+      }
+    });
+
+    // ── Login ──
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      if (!email || !password) { showError('يرجى إدخال البريد وكلمة المرور'); return; }
+      const btn = document.getElementById('login-btn');
+      const btnText = document.getElementById('login-btn-text');
+      btn.classList.add('loading'); btn.disabled = true;
+      btnText.textContent = 'جارٍ التحقق...';
+      try {
+        await loginDonor(email, password);
+        showToast('success', 'مرحباً بك في تكافل!');
+        setTimeout(() => { window.location.href = 'app.html'; }, 600);
+      } catch (err) {
+        if (err.message === 'ADMIN_REDIRECT') {
+          showToast('success', 'أنت مشرف — سيتم تحويلك للوحة التحكم');
+          setTimeout(() => { window.location.href = '../dashboard.html'; }, 800);
+          return;
+        }
+        let msg = 'حدث خطأ أثناء تسجيل الدخول';
+        if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') msg = 'البريد أو كلمة المرور غير صحيحة';
+        else if (err.code === 'auth/user-not-found') msg = 'لا يوجد حساب بهذا البريد';
+        else if (err.code === 'auth/too-many-requests') msg = 'تم تجاوز المحاولات. حاول لاحقاً';
+        else if (err.code === 'auth/network-request-failed') msg = 'فشل الاتصال بالشبكة. يرجى تشغيل VPN وإعادة المحاولة.';
+        else if (err.message) msg = err.message;
+        showError(msg);
+        btn.classList.remove('loading'); btn.disabled = false;
+        btnText.textContent = 'تسجيل الدخول';
+      }
+    });
+
+    // ── Google Auth ──
+    let pendingGoogleUser = null;
+    const gModal = document.getElementById('google-role-modal');
+    let isGoogleLoginPending = false;
+
+    async function handleGoogleLogin() {
+      if (isGoogleLoginPending) return;
+      isGoogleLoginPending = true;
+      hideError();
+      try {
+        const result = await loginWithGoogle();
+        if (result.needsRole) {
+          pendingGoogleUser = result.user;
+          gModal.classList.remove('hidden');
+        } else {
+          showToast('success', 'مرحباً بك في تكافل!');
+        }
+      } catch (err) {
+        if (err.message === 'ADMIN_REDIRECT') {
+          showToast('success', 'أنت مشرف — سيتم تحويلك للوحة التحكم');
+          setTimeout(() => { window.location.href = '../dashboard.html'; }, 800);
+        } else {
+          showError('تعذر تسجيل الدخول بواسطة جوجل: ' + (err.message || ''));
+        }
+      } finally {
+        isGoogleLoginPending = false;
+      }
+    }
+
+    document.getElementById('google-login-btn').addEventListener('click', handleGoogleLogin);
+    document.getElementById('google-register-btn').addEventListener('click', handleGoogleLogin);
+
+    document.getElementById('google-complete-btn').addEventListener('click', async () => {
+      if (!pendingGoogleUser) return;
+      const role = document.querySelector('input[name="g-reg-role"]:checked').value;
+      if (role === 'donor') {
+        const btn = document.getElementById('google-complete-btn');
+        btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;display:inline-block;vertical-align:middle;margin-left:8px;"></div> جارٍ التسجيل...';
+        btn.disabled = true;
+        try {
+          await completeGoogleRegistration(pendingGoogleUser, role);
+          gModal.classList.add('hidden');
+          showToast('success', 'تم إنشاء حسابك بنجاح!');
+          setTimeout(() => window.location.href = 'app.html', 800);
+        } catch (e) {
+          btn.innerHTML = 'تأكيد ومتابعة';
+          btn.disabled = false;
+          showToast('error', 'حدث خطأ: ' + e.message);
+        }
+      } else {
+        // Show step 2 for verification
+        document.getElementById('google-role-step-1').classList.add('hidden');
+        document.getElementById('google-role-step-2').classList.remove('hidden');
+        document.getElementById('g-reason-label').textContent = role === 'volunteer' ? 'مهاراتك وخبراتك التطوعية *' : 'سبب التسجيل / احتياجاتك';
+      }
+    });
+
+    document.getElementById('google-back-btn').addEventListener('click', () => {
+      document.getElementById('google-role-step-2').classList.add('hidden');
+      document.getElementById('google-role-step-1').classList.remove('hidden');
+    });
+
+    document.getElementById('google-final-btn').addEventListener('click', async () => {
+      if (!pendingGoogleUser) return;
+      const role = document.querySelector('input[name="g-reg-role"]:checked').value;
+      const docType = document.getElementById('g-doc-type').value;
+      const docNumber = document.getElementById('g-doc-number').value.trim();
+      const docFrontFile = document.getElementById('g-doc-front').files[0];
+      const reason = document.getElementById('g-reg-reason').value.trim();
+
+      if (!docNumber || !docFrontFile) {
+        showToast('error', 'يرجى إدخال رقم الهوية ورفع صورة الوجه الأمامي');
+        return;
+      }
+
+      const btn = document.getElementById('google-final-btn');
+      btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;display:inline-block;vertical-align:middle;margin-left:8px;"></div> جارٍ الإرسال...';
+      btn.disabled = true;
+
+      const docData = { docType, docNumber, docFrontFile, reason };
+
+      try {
+        await completeGoogleRegistrationWithVerification(pendingGoogleUser, role, docData);
+        
+        // Show pending UI
+        document.getElementById('google-role-step-2').innerHTML = `
+          <div style="text-align:center;padding:20px 0;">
+            <div style="width:64px;height:64px;border-radius:50%;background:rgba(249,168,37,0.15);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+              <i class="bi bi-hourglass-split" style="font-size:28px;color:var(--gold-500);"></i>
+            </div>
+            <h3 style="font-weight:800;margin-bottom:8px;">طلبك قيد المراجعة ✅</h3>
+            <p class="text-muted text-sm" style="line-height:1.7;">
+              تم تسجيل حسابك بنجاح. سيتم مراجعة هويتك من قِبَل فريق تكافل خلال <strong>24 ساعة</strong>.
+            </p>
+            <button class="btn btn-outline" style="margin-top:20px;" onclick="document.getElementById('google-role-modal').classList.add('hidden')">حسناً، فهمت</button>
+          </div>
+        `;
+      } catch (e) {
+        btn.innerHTML = 'إرسال الطلب';
+        btn.disabled = false;
+        showToast('error', 'حدث خطأ أثناء رفع الهوية: ' + e.message);
+      }
+    });
+  </script>
+  <script src="maintenance-check.js?v=3"></script>
+</body>
+</html>

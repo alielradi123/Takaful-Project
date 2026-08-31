@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>🔧 إصلاح مشكلة الصور — تكافل</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; max-width: 900px; margin: auto; }
+    h1 { color: #f59e0b; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin: 16px 0; }
+    .btn { background: #f59e0b; color: #000; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; margin: 4px; }
+    .btn.red { background: #ef4444; color: #fff; }
+    .btn.green { background: #22c55e; color: #000; }
+    .btn.blue { background: #3b82f6; color: #fff; }
+    .log { background: #0f172a; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 13px; max-height: 300px; overflow-y: auto; margin-top: 12px; }
+    .ok { color: #22c55e; }
+    .err { color: #ef4444; }
+    .info { color: #60a5fa; }
+    .warn { color: #f59e0b; }
+    input, select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 6px; width: 100%; box-sizing: border-box; margin: 6px 0; }
+    label { color: #94a3b8; font-size: 13px; }
+    img.preview { max-width: 200px; border-radius: 8px; border: 2px solid #334155; margin: 8px 0; display: block; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; margin: 2px; }
+    .badge.green { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
+    .badge.red { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+    .badge.yellow { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
+    progress { width: 100%; height: 10px; border-radius: 5px; }
+    hr { border-color: #334155; margin: 24px 0; }
+  </style>
+</head>
+<body>
+
+<h1>🔧 أداة إصلاح مشكلة الصور — تكافل</h1>
+<p style="color:#94a3b8">هذه الأداة تشخص وتصلح مشاكل ظهور الصور في Supabase Storage.</p>
+
+<!-- ─── إعدادات ─── -->
+<div class="card">
+  <h3>⚙️ إعدادات Supabase</h3>
+  <label>Supabase URL</label>
+  <input id="supaUrl" value="https://akvcfzbhyjwmpvbchsrl.supabase.co" />
+  <label>Anon Key</label>
+  <input id="supaKey" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFrdmNmemJoeWp3bXB2YmNoc3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI5MDY3NDgsImV4cCI6MjA5ODQ4Mjc0OH0.QOvfSzcvjSS_S7ROfHQi_XPDkPJ7LkCoEV7QmK8dN7k" />
+  <label>اسم الـ Bucket</label>
+  <input id="bucketName" value="takaful-media" />
+</div>
+
+<!-- ─── التشخيص ─── -->
+<div class="card">
+  <h3>🔍 خطوة 1: تشخيص مشكلة الـ Bucket</h3>
+  <button class="btn" onclick="diagnoseBucket()">🔍 تشخيص الآن</button>
+  <div class="log" id="diagLog"></div>
+</div>
+
+<!-- ─── اختبار رابط صورة ─── -->
+<div class="card">
+  <h3>🖼️ خطوة 2: اختبار رابط صورة معينة</h3>
+  <label>أدخل رابط الصورة (من Firestore)</label>
+  <input id="testImageUrl" placeholder="https://akvcfzbhyjwmpvbchsrl.supabase.co/storage/v1/object/public/takaful-media/..." />
+  <button class="btn" onclick="testImageUrl()">🧪 اختبر الرابط</button>
+  <div id="imgPreviewArea"></div>
+  <div class="log" id="imgTestLog"></div>
+</div>
+
+<!-- ─── رفع صورة تجريبية ─── -->
+<div class="card">
+  <h3>📤 خطوة 3: اختبار رفع صورة</h3>
+  <input type="file" id="testFile" accept="image/*" />
+  <button class="btn green" onclick="testUpload()">⬆️ ارفع واختبر</button>
+  <div class="log" id="uploadTestLog"></div>
+  <div id="uploadPreview"></div>
+</div>
+
+<!-- ─── تعليمات الإصلاح ─── -->
+<div class="card" id="fixInstructions" style="display:none">
+  <h3>🛠️ تعليمات الإصلاح</h3>
+  <div id="fixContent"></div>
+</div>
+
+<script>
+const getConfig = () => ({
+  url: document.getElementById('supaUrl').value.trim(),
+  key: document.getElementById('supaKey').value.trim(),
+  bucket: document.getElementById('bucketName').value.trim()
+});
+
+function log(id, msg, type='info') {
+  const el = document.getElementById(id);
+  const div = document.createElement('div');
+  div.className = type;
+  div.textContent = `[${new Date().toLocaleTimeString('ar')}] ${msg}`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function diagnoseBucket() {
+  const {url, key, bucket} = getConfig();
+  const logEl = document.getElementById('diagLog');
+  logEl.innerHTML = '';
+  
+  log('diagLog', '🔍 جاري التشخيص...', 'info');
+  
+  // 1. Check bucket exists
+  try {
+    const r = await fetch(`${url}/storage/v1/bucket/${bucket}`, {
+      headers: { 'Authorization': `Bearer ${key}` }
+    });
+    if (r.ok) {
+      const data = await r.json();
+      log('diagLog', `✅ الـ Bucket موجود: ${data.name}`, 'ok');
+      log('diagLog', `📋 عام (public): ${data.public ? '✅ نعم' : '❌ لا — هذه هي المشكلة الرئيسية!'}`, data.public ? 'ok' : 'err');
+      
+      if (!data.public) {
+        showFixInstructions('not_public');
+      }
+    } else {
+      const err = await r.json().catch(() => ({}));
+      log('diagLog', `❌ خطأ في قراءة الـ Bucket: ${err.message || r.statusText}`, 'err');
+      if (r.status === 401) {
+        log('diagLog', '⚠️ مشكلة في المفتاح (Anon Key) — تأكد من صحته', 'warn');
+      } else if (r.status === 404) {
+        log('diagLog', '⚠️ الـ Bucket غير موجود! يجب إنشاؤه أولاً.', 'warn');
+        showFixInstructions('no_bucket');
+      }
+    }
+  } catch(e) {
+    log('diagLog', `❌ خطأ في الاتصال: ${e.message}`, 'err');
+  }
+  
+  // 2. Check public URL access
+  log('diagLog', '🔍 اختبار الوصول العام لرابط مباشر...', 'info');
+  const testPublicUrl = `${url}/storage/v1/object/public/${bucket}/test_access_check_${Date.now()}.txt`;
+  try {
+    const r = await fetch(testPublicUrl);
+    if (r.status === 200 || r.status === 404) {
+      log('diagLog', '✅ الوصول العام يعمل (خادم الـ Storage يستجيب)', 'ok');
+    } else if (r.status === 400) {
+      log('diagLog', '❌ الوصول العام محجوب — الـ Bucket ليس Public', 'err');
+      showFixInstructions('not_public');
+    } else {
+      log('diagLog', `⚠️ استجابة غير متوقعة: ${r.status}`, 'warn');
+    }
+  } catch(e) {
+    log('diagLog', `❌ فشل اختبار الوصول العام: ${e.message}`, 'err');
+  }
+  
+  // 3. List objects to check if uploads are working
+  log('diagLog', '📋 جاري سرد محتويات الـ Bucket...', 'info');
+  try {
+    const r = await fetch(`${url}/storage/v1/object/list/${bucket}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ limit: 10, offset: 0 })
+    });
+    if (r.ok) {
+      const files = await r.json();
+      if (Array.isArray(files) && files.length > 0) {
+        log('diagLog', `✅ يوجد ${files.length} ملف في الـ Bucket`, 'ok');
+        files.slice(0,5).forEach(f => {
+          log('diagLog', `   📄 ${f.name}`, 'info');
+        });
+      } else {
+        log('diagLog', '⚠️ الـ Bucket فارغ — لم يتم رفع أي ملفات بعد', 'warn');
+      }
+    } else {
+      log('diagLog', `❌ لا يمكن سرد الملفات: ${r.status}`, 'err');
+    }
+  } catch(e) {
+    log('diagLog', `❌ خطأ في سرد الملفات: ${e.message}`, 'err');
+  }
+}
+
+async function testImageUrl() {
+  const testUrl = document.getElementById('testImageUrl').value.trim();
+  const logId = 'imgTestLog';
+  document.getElementById(logId).innerHTML = '';
+  document.getElementById('imgPreviewArea').innerHTML = '';
+  
+  if (!testUrl) { log(logId, '⚠️ أدخل رابطاً أولاً', 'warn'); return; }
+  
+  log(logId, `🔍 اختبار: ${testUrl}`, 'info');
+  
+  try {
+    const r = await fetch(testUrl, { method: 'HEAD' });
+    log(logId, `📡 HTTP Status: ${r.status} ${r.statusText}`, r.ok ? 'ok' : 'err');
+    
+    if (r.ok) {
+      log(logId, '✅ الرابط يعمل! — المشكلة قد تكون في الكود وليس في Supabase', 'ok');
+      const img = document.createElement('img');
+      img.src = testUrl;
+      img.className = 'preview';
+      img.alt = 'معاينة الصورة';
+      img.onerror = () => { log(logId, '❌ الصورة لا تعرض (قد يكون ملف غير صورة)', 'err'); };
+      img.onload = () => { log(logId, '✅ الصورة تعرض بشكل صحيح!', 'ok'); };
+      document.getElementById('imgPreviewArea').appendChild(img);
+    } else if (r.status === 400) {
+      log(logId, '❌ خطأ 400 — الـ Bucket ليس Public أو الرابط خاطئ', 'err');
+      showFixInstructions('not_public');
+    } else if (r.status === 403) {
+      log(logId, '❌ خطأ 403 — الوصول مرفوض. RLS policy تمنع القراءة', 'err');
+      showFixInstructions('rls_policy');
+    } else if (r.status === 404) {
+      log(logId, '❌ خطأ 404 — الصورة غير موجودة في Supabase', 'err');
+      log(logId, '   الحل: قد تكون الصورة حُذفت أو لم تُرفع بنجاح', 'warn');
+    }
+  } catch(e) {
+    log(logId, `❌ خطأ في الاتصال: ${e.message}`, 'err');
+  }
+}
+
+async function testUpload() {
+  const {url, key, bucket} = getConfig();
+  const file = document.getElementById('testFile').files[0];
+  const logId = 'uploadTestLog';
+  document.getElementById(logId).innerHTML = '';
+  document.getElementById('uploadPreview').innerHTML = '';
+  
+  if (!file) { log(logId, '⚠️ اختر ملفاً أولاً', 'warn'); return; }
+  
+  log(logId, `📤 جاري رفع: ${file.name} (${(file.size/1024).toFixed(1)} KB)`, 'info');
+  
+  const path = `test_uploads/test_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+  const uploadUrl = `${url}/storage/v1/object/${bucket}/${path}`;
+  
+  try {
+    const r = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': file.type || 'image/jpeg',
+        'x-upsert': 'true'
+      },
+      body: file
+    });
+    
+    if (r.ok) {
+      const publicUrl = `${url}/storage/v1/object/public/${bucket}/${path}`;
+      log(logId, '✅ تم الرفع بنجاح!', 'ok');
+      log(logId, `🔗 الرابط: ${publicUrl}`, 'ok');
+      
+      // Test if public URL works
+      setTimeout(async () => {
+        const testR = await fetch(publicUrl, {method: 'HEAD'}).catch(() => null);
+        if (testR && testR.ok) {
+          log(logId, '✅ الرابط العام يعمل! الصور ستظهر بشكل طبيعي.', 'ok');
+          const img = document.createElement('img');
+          img.src = publicUrl;
+          img.className = 'preview';
+          document.getElementById('uploadPreview').appendChild(img);
+        } else {
+          log(logId, `❌ الرابط العام لا يعمل! (${testR?.status}) — الـ Bucket ليس Public`, 'err');
+          showFixInstructions('not_public');
+        }
+      }, 1000);
+      
+    } else {
+      const err = await r.json().catch(() => ({message: r.statusText}));
+      log(logId, `❌ فشل الرفع [${r.status}]: ${err.message}`, 'err');
+      
+      if (r.status === 404) {
+        log(logId, '⚠️ الـ Bucket غير موجود! يجب إنشاؤه أولاً', 'warn');
+        showFixInstructions('no_bucket');
+      } else if (r.status === 403) {
+        log(logId, '⚠️ لا توجد صلاحية رفع. تحقق من سياسات RLS', 'warn');
+        showFixInstructions('rls_policy');
+      }
+    }
+  } catch(e) {
+    log(logId, `❌ خطأ: ${e.message}`, 'err');
+  }
+}
+
+function showFixInstructions(type) {
+  const box = document.getElementById('fixInstructions');
+  const content = document.getElementById('fixContent');
+  box.style.display = 'block';
+  
+  const fixes = {
+    not_public: `
+      <h4 style="color:#ef4444">🔴 المشكلة: الـ Bucket ليس Public</h4>
+      <p>يجب تفعيل خاصية "Public" للـ Bucket حتى تظهر الصور. اتبع الخطوات التالية:</p>
+      <ol>
+        <li>اذهب إلى <a href="https://supabase.com/dashboard" target="_blank" style="color:#60a5fa">لوحة Supabase</a></li>
+        <li>اختر مشروعك → Storage</li>
+        <li>ابحث عن الـ bucket <strong>takaful-media</strong></li>
+        <li>اضغط على النقاط الثلاث (...) بجانب الـ Bucket</li>
+        <li>اختر <strong>"Edit bucket"</strong></li>
+        <li>فعّل <strong>"Public bucket"</strong></li>
+        <li>احفظ التغييرات</li>
+      </ol>
+      <p style="color:#22c55e">✅ بعد ذلك ستظهر الصور تلقائياً في الموقع والتطبيق ولوحة التحكم.</p>
+    `,
+    no_bucket: `
+      <h4 style="color:#ef4444">🔴 المشكلة: الـ Bucket غير موجود</h4>
+      <p>يجب إنشاء الـ Bucket أولاً:</p>
+      <ol>
+        <li>اذهب إلى <a href="https://supabase.com/dashboard" target="_blank" style="color:#60a5fa">لوحة Supabase</a></li>
+        <li>اختر مشروعك → Storage</li>
+        <li>اضغط <strong>"New bucket"</strong></li>
+        <li>الاسم: <strong>takaful-media</strong></li>
+        <li>فعّل <strong>"Public bucket"</strong></li>
+        <li>اضغط Save</li>
+      </ol>
+    `,
+    rls_policy: `
+      <h4 style="color:#ef4444">🔴 المشكلة: سياسات RLS تمنع الوصول</h4>
+      <p>يجب إضافة سياسة SELECT عامة:</p>
+      <ol>
+        <li>اذهب إلى Supabase → Storage → Policies</li>
+        <li>ابحث عن الـ bucket <strong>takaful-media</strong></li>
+        <li>أضف Policy جديدة:
+          <ul>
+            <li>Operation: SELECT</li>
+            <li>Target roles: public (anon)</li>
+            <li>Policy: true (السماح للجميع)</li>
+          </ul>
+        </li>
+      </ol>
+      <p>أو الأسهل: اجعل الـ Bucket Public كما في التعليمات أعلاه.</p>
+    `
+  };
+  
+  content.innerHTML = fixes[type] || '<p>اتبع التعليمات أعلاه</p>';
+}
+</script>
+</body>
+</html>
