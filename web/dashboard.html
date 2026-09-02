@@ -25,6 +25,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
   <link rel="stylesheet" href="style.css">
 </head>
@@ -361,6 +363,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
     {id:'home',l:'الرئيسية',icon:'bi-grid-1x2-fill',g:'main'},
     {id:'pending',l:'الحالات المعلقة',icon:'bi-hourglass-split',g:'main',badge:pending.length},
     {id:'cases',l:'جميع الحالات',icon:'bi-journal-medical',g:'main'},
+    {id:'tracking',l:'تتبع المتطوعين',icon:'bi-geo-alt-fill',g:'main'},
     {id:'donations',l:'التبرعات',icon:'bi-heart-fill',g:'data'},
     {id:'users',l:'المستخدمون',icon:'bi-people-fill',g:'data'},
     {id:'verifications',l:'التحقق من الهوية',icon:'bi-shield-check',g:'data',badge:verifications.filter(v=>v.verificationStatus==='pending').length},
@@ -374,6 +377,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
     home:['لوحة القيادة','متابعة إحصائيات تكافل'],
     pending:['الحالات المعلقة','مراجعة الحالات المقدمة'],
     cases:['جميع الحالات','إدارة وتحديث الحالات'],
+    tracking:['تتبع المتطوعين','خريطة حية لمتابعة المتطوعين الميدانيين'],
     donations:['التبرعات والمساهمات','إدارة التبرعات والحوالات'],
     users:['المستخدمون','إدارة حسابات المستخدمين'],
     verifications:['التحقق من الهوية','مراجعة طلبات التحقق للمستفيدين والمتطوعين'],
@@ -473,6 +477,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
           {page==='home'      && <HomeView cases={cases} donations={donations} users={users} totalAmt={totalAmt} pending={pending} approved={approved} doApprove={doApprove} doReject={doReject} />}
           {page==='pending'   && <PendingView cases={pending} doApprove={doApprove} doReject={doReject} doDelCase={doDelCase} />}
           {page==='cases'     && <CasesView cases={cases} users={users} doApprove={doApprove} doReject={doReject} doComplete={doComplete} doDelCase={doDelCase} doUpdateRaisedAmount={doUpdateRaisedAmount} setAssignModal={setAssignModal} openNewCase={openNewCase} setOpenNewCase={setOpenNewCase} />}
+          {page==='tracking'  && <TrackingView users={users} cases={cases} />}
           {page==='donations' && <DonationsView donations={donations} cases={cases} users={users} doDonStat={doDonStat} doDelDon={doDelDon} doConfirmReceived={doConfirmReceived} doConfirmDistributed={doConfirmDistributed} />}
           {page==='users'     && <UsersView users={users} doToggle={doToggle} doDelUser={doDelUser} doChangeRole={doChangeRole} />}
           {page==='verifications' && <VerificationsView verifications={verifications} doDelVerification={doDelVerification} />}
@@ -2502,6 +2507,95 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
           <button className="btn btn-primary px-4 py-2" onClick={save} disabled={saving} style={{fontSize:'1rem', borderRadius:'50px', boxShadow:'0 4px 15px rgba(16,185,129,0.3)'}}>
             {saving?<div className="spinner-border spinner-border-sm"></div>:<><i className="bi bi-check-lg me-2"></i>حفظ جميع إعدادات النظام</>}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+// TRACKING VIEW (Live Volunteer GPS)
+// ══════════════════════════════════════════
+function TrackingView({users, cases}) {
+  const mapRef = useRef(null);
+  const leafletMap = useRef(null);
+  const markersRef = useRef({});
+  const [locations, setLocations] = useState([]);
+  
+  // Listen to volunteer locations
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'volunteerLocations'), (snapshot) => {
+      const locs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setLocations(locs);
+    });
+    return () => unsub();
+  }, []);
+
+  // Initialize Map
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (!leafletMap.current) {
+      leafletMap.current = L.map(mapRef.current).setView([15.5007, 32.5599], 12); // Default to Khartoum, Sudan
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(leafletMap.current);
+    }
+  }, []);
+
+  // Update Markers
+  useEffect(() => {
+    if (!leafletMap.current) return;
+    const map = leafletMap.current;
+
+    locations.forEach(loc => {
+      const { id, latitude, longitude, timestamp } = loc;
+      // Get volunteer details
+      const user = users.find(u => u.uid === id || u.id === id);
+      const name = user ? user.name : 'متطوع غير معروف';
+      
+      const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString('ar-SA') : 'غير معروف';
+
+      if (markersRef.current[id]) {
+        markersRef.current[id].setLatLng([latitude, longitude]);
+        markersRef.current[id].setPopupContent(`<b>${name}</b><br/>آخر تحديث: ${timeStr}`);
+      } else {
+        const customIcon = L.divIcon({
+          html: `<div style="font-size: 24px; color: var(--primary);"><i class="bi bi-car-front-fill"></i></div>`,
+          className: 'custom-leaflet-icon',
+          iconSize: [30, 30],
+          iconAnchor: [15, 30]
+        });
+        const marker = L.marker([latitude, longitude], {icon: customIcon}).addTo(map);
+        marker.bindPopup(`<b>${name}</b><br/>آخر تحديث: ${timeStr}`);
+        markersRef.current[id] = marker;
+      }
+    });
+
+    // Optionally center map on first active volunteer
+    if (locations.length > 0 && leafletMap.current.getZoom() === 12) {
+       leafletMap.current.panTo([locations[0].latitude, locations[0].longitude]);
+    }
+
+  }, [locations, users]);
+
+  return (
+    <div style={{display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)'}}>
+      <div className="card h-100" style={{flex: 1, display: 'flex', flexDirection: 'column'}}>
+        <div className="card-header d-flex justify-content-between align-items-center">
+          <div className="bold"><i className="bi bi-geo-alt-fill me-2 text-primary"></i>الخريطة المباشرة للمتطوعين النشطين</div>
+          <span className="badge bg-primary rounded-pill">{locations.length} متطوع ميداني</span>
+        </div>
+        <div className="card-body p-0" style={{flex: 1, position: 'relative'}}>
+          <div ref={mapRef} style={{width: '100%', height: '100%', minHeight: '400px', borderRadius: '0 0 var(--radius) var(--radius)'}}></div>
+          {locations.length === 0 && (
+            <div style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 1000}}>
+              <div className="text-center" style={{background: 'var(--bg-glass)', padding: '20px', borderRadius: 'var(--radius)', backdropFilter: 'blur(10px)'}}>
+                <i className="bi bi-car-front" style={{fontSize: '3rem', color: 'var(--text-secondary)'}}></i>
+                <h4 className="mt-3">لا يوجد متطوعون نشطون حالياً</h4>
+                <p className="text-muted">تظهر مواقع المتطوعين هنا عند قبولهم لمهام ميدانية.</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
