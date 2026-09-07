@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="تكافل — تصفح الحالات الإنسانية وتبرع لدعم المحتاجين">
   <title>تكافل — بوابة المتبرعين</title>
   <link rel="icon" type="image/webp" href="../app-icon.webp">
@@ -111,6 +111,7 @@ function App() {
   });
   const [selectedCase, setSelectedCase] = useState(null);
   const [donateCase, setDonateCase] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Chat state
   const [chats, setChats] = useState([]);
@@ -131,6 +132,20 @@ function App() {
   const markAsRead = async (id) => {
     try { await updateDoc(doc(db, 'notifications', id), { isRead: true }); } catch (e) {}
   };
+
+  const [lang, setLang] = useState(() => localStorage.getItem('takaful-lang') || 'ar');
+  const isAr = lang === 'ar';
+  const toggleLang = () => {
+    const nl = isAr ? 'en' : 'ar';
+    setLang(nl);
+    requestAnimationFrame(() => { const button = document.querySelector('.language-toggle'); if (button) { button.classList.remove('is-changing'); void button.offsetWidth; button.classList.add('is-changing'); } });
+  };
+
+  useEffect(() => {
+    document.documentElement.setAttribute('lang', lang);
+    document.documentElement.setAttribute('dir', lang === 'ar' ? 'rtl' : 'ltr');
+    localStorage.setItem('takaful-lang', lang);
+  }, [lang]);
 
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme',dark?'dark':'light');
@@ -276,50 +291,54 @@ function App() {
     const cid = chatIdArg || activeChatId;
     if(!cid || !msgId || !newText || !newText.trim()) return;
     try {
-      await updateDoc(doc(db,'chats',cid,'messages',msgId),{text:newText.trim(), updatedAt:serverTimestamp()});
-      showToast('success','تم تعديل الرسالة بنجاح');
+      await updateDoc(doc(db,'chats',cid,'messages',msgId),{text: newText.trim(), updatedAt: serverTimestamp()});
+      showToast('success', isAr?'تم تعديل الرسالة':'Message updated');
     } catch(e) { showToast('error', e.message); }
   };
 
-  // Stats
-  const myTotalAmt = donations.reduce((s,d)=>{
-    const amt = d.amount || parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
-    return s + amt;
-  },0);
-  const casesHelped = new Set(donations.filter(d=>d.caseId).map(d=>d.caseId)).size;
+  // Computed stats
+  const myTotalAmt = donations.reduce((s,d)=>s+(d.amount||0),0);
+  const casesHelped = new Set(donations.map(d=>d.caseId).filter(Boolean)).size;
 
   // Greeting
   const hour = new Date().getHours();
-  const greeting = hour>=5&&hour<12?'صباح الخير':hour>=12&&hour<18?'مساء الخير':'طابت مساؤك';
+  const greeting = hour>=5&&hour<12 ? (isAr?'صباح الخير':'Good morning') : hour>=12&&hour<18 ? (isAr?'مساء الخير':'Good afternoon') : (isAr?'طابت مساؤك':'Good evening');
 
   if(loading) return (
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg-body)'}}>
       <div style={{textAlign:'center'}}>
         <div className="spinner" style={{width:'2.5rem',height:'2.5rem',margin:'0 auto'}}></div>
-        <p style={{marginTop:16,color:'var(--text-muted)',fontFamily:'inherit'}}>جارٍ التحقق...</p>
+        <p style={{marginTop:16,color:'var(--text-muted)',fontFamily:'inherit'}}>{isAr?'جارٍ التحقق...':'Verifying...'}</p>
       </div>
     </div>
   );
 
-  const NAV = [
+  const NAV = isAr ? [
     {id:'home',l:'الرئيسية',icon:'bi-house-fill'},
     {id:'cases',l:'الحالات',icon:'bi-heart-fill'},
     {id:'donations',l:'تبرعاتي',icon:'bi-gift-fill'},
     {id:'chat',l:'الدعم',icon:'bi-chat-dots-fill'},
     {id:'profile',l:'حسابي',icon:'bi-person-fill'},
+  ] : [
+    {id:'home',l:'Home',icon:'bi-house-fill'},
+    {id:'cases',l:'Cases',icon:'bi-heart-fill'},
+    {id:'donations',l:'My Donations',icon:'bi-gift-fill'},
+    {id:'chat',l:'Support',icon:'bi-chat-dots-fill'},
+    {id:'profile',l:'My Profile',icon:'bi-person-fill'},
   ];
 
   return (
     <div className="app-layout">
       {/* SIDEBAR */}
-      <aside className="sidebar">
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={()=>setSidebarOpen(false)}></div>}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-logo">
             <img src="../app-icon.webp" alt="تكافل" />
           </div>
           <div className="sidebar-brand">
-            <h2>تـكـافـل</h2>
-            <p>بوابة المتبرعين</p>
+            <h2>{isAr ? 'تـكـافـل' : 'Takaful'}</h2>
+            <p>{isAr ? 'بوابة المتبرعين' : 'Donor Portal'}</p>
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -345,7 +364,7 @@ function App() {
               onMouseEnter={e=>{e.currentTarget.style.background='rgba(239,68,68,0.2)'}}
               onMouseLeave={e=>{e.currentTarget.style.background='rgba(239,68,68,0.1)'}}
             >
-              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+              <i className="bi bi-box-arrow-right"></i> {isAr ? 'تسجيل الخروج' : 'Sign Out'}
             </button>
           </div>
         </div>
@@ -354,12 +373,19 @@ function App() {
       {/* MAIN */}
       <div className="main-content">
         <header className="topbar">
+          <button className="mobile-menu-toggle" type="button" aria-label="Open menu" onClick={()=>setSidebarOpen(true)}><i className="bi bi-list"></i></button>
           <div style={{flex:1}}>
-            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || 'تكافل'}</div>
+            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || (isAr ? 'تكافل' : 'Takaful')}</div>
           </div>
           <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            {/* Language Toggle */}
+            <button onClick={toggleLang} className={`language-toggle ${isAr ? 'is-ar' : 'is-en'}`} title={isAr ? 'Switch to English' : 'التبديل للعربية'}>
+              <span className={`language-toggle-icon ${isAr ? 'flag-uk' : 'flag-sudan'}`} aria-hidden="true">{isAr ? '🇬🇧' : '🇸🇩'}</span>
+              <span className="language-toggle-label">{isAr ? 'EN' : 'Ar'}</span>
+            </button>
+
             {/* Notification pill */}
-            <div style={{position:'relative'}}>
+            <div className="notification-control" style={{position:'relative'}}>
               <button
                 onClick={()=>setShowNotifMenu(!showNotifMenu)}
                 style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px',borderRadius:'50px',background:showNotifMenu?'var(--brand-500)':'var(--bg-glass)',border:'1px solid',borderColor:showNotifMenu?'var(--brand-500)':'var(--border)',color:showNotifMenu?'#fff':'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,transition:'all 0.2s ease',backdropFilter:'blur(10px)',whiteSpace:'nowrap'}}
@@ -369,21 +395,21 @@ function App() {
                 <i className="bi bi-bell-fill" style={{fontSize:15}}></i>
                 {unreadCount > 0
                   ? <span style={{background:'#EF4444',color:'#fff',fontSize:10,fontWeight:800,padding:'1px 6px',borderRadius:20,minWidth:18,textAlign:'center'}}>{unreadCount}</span>
-                  : <span style={{fontSize:12,opacity:.7}}>الإشعارات</span>
+                  : <span style={{fontSize:12,opacity:.7}}>{isAr ? 'الإشعارات' : 'Notifications'}</span>
                 }
               </button>
               {showNotifMenu && (
                 <>
                   <div style={{position:'fixed',top:0,left:0,width:'100%',height:'100%',zIndex:40}} onClick={()=>setShowNotifMenu(false)}></div>
-                  <div className="card" style={{position:'absolute',top:'120%',left:0,width:300,maxHeight:380,overflowY:'auto',zIndex:50,boxShadow:'0 20px 60px rgba(0,0,0,0.4)',padding:0,borderRadius:'var(--radius-lg)',border:'1px solid var(--border)'}}>
+                  <div className="card notification-menu" style={{position:'absolute',top:'120%',right:0,left:'auto',width:300,maxHeight:380,overflowY:'auto',zIndex:50,boxShadow:'0 20px 60px rgba(0,0,0,0.4)',padding:0,borderRadius:'var(--radius-lg)',border:'1px solid var(--border)'}}>
                     <div style={{padding:'14px 16px',borderBottom:'1px solid var(--border)',fontWeight:800,display:'flex',justifyContent:'space-between',alignItems:'center',background:'linear-gradient(135deg,rgba(232,80,10,0.08),transparent)',borderRadius:'var(--radius-lg) var(--radius-lg) 0 0'}}>
-                      <span style={{display:'flex',alignItems:'center',gap:8}}><i className="bi bi-bell-fill" style={{color:'var(--brand-400)'}}></i>الإشعارات</span>
-                      {unreadCount > 0 && <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)'}} onClick={markAllRead}>تحديد كمقروء</button>}
+                      <span style={{display:'flex',alignItems:'center',gap:8}}><i className="bi bi-bell-fill" style={{color:'var(--brand-400)'}}></i>{isAr ? 'الإشعارات' : 'Notifications'}</span>
+                      {unreadCount > 0 && <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)'}} onClick={markAllRead}>{isAr ? 'تحديد كمقروء' : 'Mark all read'}</button>}
                     </div>
                     {notifications.length === 0 ? (
                       <div style={{padding:28,textAlign:'center',color:'var(--text-muted)'}}>
                         <i className="bi bi-bell-slash" style={{fontSize:32,display:'block',marginBottom:10,opacity:.4}}></i>
-                        لا توجد إشعارات
+                        {isAr ? 'لا توجد إشعارات' : 'No notifications'}
                       </div>
                     ) : (
                       notifications.map(n => (
@@ -401,29 +427,24 @@ function App() {
 
             {/* Day/Night pill toggle */}
             <button
-              onClick={()=>setDark(d=>!d)}
-              title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
+              onClick={()=>{setDark(d=>!d); requestAnimationFrame(()=>{const b=document.querySelector('.theme-toggle'); if(b){b.classList.remove('is-changing'); void b.offsetWidth; b.classList.add('is-changing');}})}}
+              className="theme-toggle"
+              title={dark?(isAr?'تفعيل الوضع النهاري':'Switch to Light Mode'):(isAr?'تفعيل الوضع الليلي':'Switch to Dark Mode')}
               style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(30,30,60,0.9)':'rgba(255,200,50,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.2)':'rgba(249,168,37,0.35)',cursor:'pointer',transition:'all 0.35s ease',backdropFilter:'blur(10px)',gap:2,position:'relative',minWidth:70}}
             >
-              {/* Sun icon */}
-              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14,color:dark?'rgba(255,200,50,0.4)':'#fff',boxShadow:dark?'none':'0 2px 8px rgba(249,168,37,0.5)'}}>
-                ☀️
-              </span>
-              {/* Moon icon */}
-              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.8)':'transparent',transition:'all 0.35s ease',fontSize:14,color:dark?'#fff':'rgba(99,102,241,0.3)',boxShadow:dark?'0 2px 8px rgba(99,102,241,0.5)':'none'}}>
-                🌙
-              </span>
+              <span className={`theme-toggle-icon ${!dark ? 'is-active' : ''}`} aria-hidden="true"><i className="bi bi-sun-fill" /></span>
+              <span className={`theme-toggle-icon moon ${dark ? 'is-active' : ''}`} aria-hidden="true"><i className="bi bi-moon-stars-fill" /></span>
             </button>
           </div>
         </header>
         <main className="page-content">
-          {page==='home' && !selectedCase && !donateCase && <HomePage cases={cases} donations={donations} greeting={greeting} profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} onViewAll={()=>setPage('cases')} onViewDonations={()=>setPage('donations')} />}
-          {page==='cases' && !selectedCase && !donateCase && <CasesPage cases={cases} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} />}
-          {page==='detail' && selectedCase && !donateCase && <CaseDetailPage c={selectedCase} onBack={()=>{setSelectedCase(null);setPage('cases')}} onDonate={()=>{setDonateCase(selectedCase);setPage('donate')}} user={user} profile={profile} />}
-          {page==='donate' && donateCase && <DonationFormPage c={donateCase} cases={cases} user={user} profile={profile} onBack={()=>{setDonateCase(null);setPage(selectedCase?'detail':'cases')}} onSuccess={()=>{setDonateCase(null);setSelectedCase(null);setPage('donations')}} />}
-          {page==='donations' && <DonationsPage donations={donations} />}
-          {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} />}
-          {page==='profile' && <ProfilePage profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} dark={dark} setDark={setDark} user={user} setProfile={setProfile} />}
+          {page==='home' && !selectedCase && !donateCase && <HomePage cases={cases} donations={donations} greeting={greeting} profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} onViewAll={()=>setPage('cases')} onViewDonations={()=>setPage('donations')} isAr={isAr} />}
+          {page==='cases' && !selectedCase && !donateCase && <CasesPage cases={cases} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} isAr={isAr} />}
+          {page==='detail' && selectedCase && !donateCase && <CaseDetailPage c={selectedCase} onBack={()=>{setSelectedCase(null);setPage('cases')}} onDonate={()=>{setDonateCase(selectedCase);setPage('donate')}} user={user} profile={profile} isAr={isAr} />}
+          {page==='donate' && donateCase && <DonationFormPage c={donateCase} cases={cases} user={user} profile={profile} onBack={()=>{setDonateCase(null);setPage(selectedCase?'detail':'cases')}} onSuccess={()=>{setDonateCase(null);setSelectedCase(null);setPage('donations')}} isAr={isAr} />}
+          {page==='donations' && <DonationsPage donations={donations} isAr={isAr} />}
+          {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} isAr={isAr} />}
+          {page==='profile' && <ProfilePage profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
         </main>
       </div>
     </div>
@@ -433,7 +454,7 @@ function App() {
 // ═══════════════════════════════════════
 // SMART SLIDER
 // ═══════════════════════════════════════
-function SmartSlider({ cases, onCaseClick }) {
+function SmartSlider({ cases, onCaseClick, isAr }) {
   const { useState, useEffect } = React;
   const [current, setCurrent] = useState(0);
 
@@ -449,6 +470,7 @@ function SmartSlider({ cases, onCaseClick }) {
 
   const currentCase = cases[current];
   const firstImg = (currentCase.imageUrls && currentCase.imageUrls.length > 0) ? currentCase.imageUrls[0] : currentCase.imageUrl;
+  const catText = currentCase.category==='مالي'?(isAr?'مالي':'Financial'):currentCase.category==='عيني'?(isAr?'عيني':'In-Kind'):currentCase.category==='طبي'?(isAr?'طبي':'Medical'):(currentCase.category||(isAr?'عام':'General'));
 
   return (
     <div style={{ position: 'relative', width: '100%', height: 200, borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: 24, boxShadow: '0 8px 24px rgba(0,0,0,0.1)', cursor: 'pointer' }} onClick={() => onCaseClick(currentCase)}>
@@ -464,9 +486,9 @@ function SmartSlider({ cases, onCaseClick }) {
       <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: 20 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           {(currentCase.urgencyLevel === 'عاجل' || currentCase.urgencyLevel === 'urgent') && (
-            <span style={{ background: '#EF4444', color: '#fff', fontSize: 10, padding: '2px 8px', borderRadius: 12, fontWeight: 800 }}>عاجل</span>
+            <span style={{ background: '#EF4444', color: '#fff', fontSize: 10, padding: '2px 8px', borderRadius: 12, fontWeight: 800 }}>{isAr ? 'عاجل' : 'Urgent'}</span>
           )}
-          <span style={{ background: 'var(--brand-500)', color: '#fff', fontSize: 10, padding: '2px 8px', borderRadius: 12, fontWeight: 800 }}>{currentCase.category || 'عام'}</span>
+          <span style={{ background: 'var(--brand-500)', color: '#fff', fontSize: 10, padding: '2px 8px', borderRadius: 12, fontWeight: 800 }}>{catText}</span>
         </div>
         <h3 style={{ color: '#fff', margin: 0, fontSize: 16, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCase.title}</h3>
       </div>
@@ -484,10 +506,10 @@ function SmartSlider({ cases, onCaseClick }) {
 // ═══════════════════════════════════════
 // HOME PAGE
 // ═══════════════════════════════════════
-function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCaseClick,onViewAll,onViewDonations}) {
+function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCaseClick,onViewAll,onViewDonations,isAr}) {
   const recent = donations.slice(0,3);
   const recommended = cases.slice(0,6);
-  const urgentCases = cases.filter(c=>c.urgencyLevel==='high'||c.urgencyLevel==='عاجل').slice(0,3);
+  const urgentCases = cases.filter(c=>c.urgencyLevel==='high'||c.urgencyLevel==='عاجل'||c.urgencyLevel==='urgent').slice(0,3);
   const sliderCases = urgentCases.length > 0 ? urgentCases : recommended.slice(0, 4);
   return (
     <div>
@@ -503,20 +525,20 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
           </div>
           <div>
             <div className="hero-greeting" style={{fontSize:13}}>{greeting}،</div>
-            <div className="hero-name" style={{fontSize:22}}>{(profile.name||'').split(' ').slice(0,2).join(' ')||'متبرع'}</div>
+            <div className="hero-name" style={{fontSize:22}}>{(profile.name||'').split(' ').slice(0,2).join(' ')||(isAr ? 'متبرع' : 'Donor')}</div>
           </div>
         </div>
         <div className="hero-stats">
           <div className="hero-stat" onClick={onViewDonations} style={{cursor:'pointer'}}>
-            <div className="hero-stat-label"><i className="bi bi-coin"></i> إجمالي تبرعاتي</div>
-            <div className="hero-stat-value">{fmtNum(myTotalAmt)} ج.س</div>
+            <div className="hero-stat-label"><i className="bi bi-coin"></i> {isAr ? 'إجمالي تبرعاتي' : 'My Total Donations'}</div>
+            <div className="hero-stat-value">{fmtNum(myTotalAmt)} {isAr ? 'ج.س' : 'SDG'}</div>
           </div>
           <div className="hero-stat">
-            <div className="hero-stat-label"><i className="bi bi-heart-fill"></i> حالات دعمتها</div>
-            <div className="hero-stat-value">{casesHelped} حالة</div>
+            <div className="hero-stat-label"><i className="bi bi-heart-fill"></i> {isAr ? 'حالات دعمتها' : 'Supported Cases'}</div>
+            <div className="hero-stat-value">{casesHelped} {isAr ? 'حالة' : 'cases'}</div>
           </div>
           <div className="hero-stat">
-            <div className="hero-stat-label"><i className="bi bi-file-earmark-check"></i> تبرعاتي</div>
+            <div className="hero-stat-label"><i className="bi bi-file-earmark-check"></i> {isAr ? 'تبرعاتي' : 'My Donations'}</div>
             <div className="hero-stat-value">{donations.length}</div>
           </div>
         </div>
@@ -524,7 +546,7 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
 
       {/* Smart Slider */}
       {sliderCases.length > 0 && (
-        <SmartSlider cases={sliderCases} onCaseClick={onCaseClick} />
+        <SmartSlider cases={sliderCases} onCaseClick={onCaseClick} isAr={isAr} />
       )}
 
       {/* Urgent Cases Alert */}
@@ -534,11 +556,11 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
             <i className="bi bi-exclamation-triangle-fill" style={{color:'#F87171',fontSize:20}}></i>
           </div>
           <div style={{flex:1}}>
-            <div style={{fontWeight:800,fontSize:14,color:'#F87171',marginBottom:2}}>حالات عاجلة تحتاج مساعدتك!</div>
-            <div style={{fontSize:12,color:'var(--text-secondary)'}}>{urgentCases.length} حالة عاجلة متاحة الآن للتبرع</div>
+            <div style={{fontWeight:800,fontSize:14,color:'#F87171',marginBottom:2}}>{isAr ? 'حالات عاجلة تحتاج مساعدتك!' : 'Urgent cases need your help!'}</div>
+            <div style={{fontSize:12,color:'var(--text-secondary)'}}>{urgentCases.length} {isAr ? 'حالة عاجلة متاحة الآن للتبرع' : 'urgent cases available now for donation'}</div>
           </div>
           <button className="btn btn-sm" style={{background:'#EF4444',color:'#fff',borderRadius:'var(--radius-sm)',padding:'8px 16px',whiteSpace:'nowrap'}} onClick={onViewAll}>
-            تبرع الآن
+            {isAr ? 'تبرع الآن' : 'Donate Now'}
           </button>
         </div>
       )}
@@ -547,18 +569,20 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
       {recent.length > 0 && (
         <div>
           <div className="section-header">
-            <div className="section-title"><div className="section-bar"></div>آخر تبرعاتي</div>
-            <div className="section-action" onClick={onViewDonations}>عرض الكل <i className="bi bi-chevron-left"></i></div>
+            <div className="section-title"><div className="section-bar"></div>{isAr ? 'آخر تبرعاتي' : 'My Recent Donations'}</div>
+            <div className="section-action" onClick={onViewDonations}>{isAr ? 'عرض الكل' : 'View All'} <i className={`bi ${isAr?'bi-chevron-left':'bi-chevron-right'}`}></i></div>
           </div>
           <div className="card" style={{marginBottom:24}}>
             {recent.map(d=>(
               <div key={d.id} className="donation-item">
                 <div className="donation-icon"><i className="bi bi-heart-fill"></i></div>
                 <div style={{flex:1,minWidth:0}}>
-                  <div className="bold truncate" style={{fontSize:14}}>{d.caseTitle||'تبرع عام'}</div>
-                  <div className="text-sm text-muted">{d.amountOrItem||`${fmtNum(d.amount)} ج.س`} • {fmtDate(d.createdAt)}</div>
+                  <div className="bold truncate" style={{fontSize:14}}>{d.caseTitle || (isAr ? 'تبرع عام' : 'General Donation')}</div>
+                  <div className="text-sm text-muted">{d.amountOrItem||`${fmtNum(d.amount)} ${isAr?'ج.س':'SDG'}`} • {fmtDate(d.createdAt)}</div>
                 </div>
-                <span className={`badge ${d.status==='تم التوزيع'?'badge-status-distributed':d.status==='تم الاستلام'?'badge-status-received':'badge-status-collecting'}`}>{d.status||'قيد الجمع'}</span>
+                <span className={`badge ${d.status==='تم التوزيع'?'badge-status-distributed':d.status==='تم الاستلام'?'badge-status-received':'badge-status-collecting'}`}>
+                  {d.status==='تم التوزيع'?(isAr?'تم التوزيع':'Distributed'):d.status==='تم الاستلام'?(isAr?'تم الاستلام':'Received'):(d.status||(isAr?'قيد الجمع':'Collecting'))}
+                </span>
               </div>
             ))}
           </div>
@@ -569,24 +593,24 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
       {donations.length === 0 && (
         <div style={{background:'linear-gradient(135deg,rgba(232,80,10,0.08),rgba(249,168,37,0.05))',border:'1px solid rgba(232,80,10,0.15)',borderRadius:'var(--radius-xl)',padding:28,marginBottom:24,textAlign:'center'}}>
           <i className="bi bi-gift" style={{fontSize:48,color:'var(--brand-400)',display:'block',marginBottom:12,opacity:.8}}></i>
-          <div style={{fontWeight:800,fontSize:16,marginBottom:6}}>ابدأ رحلة العطاء</div>
-          <div style={{color:'var(--text-secondary)',fontSize:13,marginBottom:16}}>تبرعك الأول يغير حياة إنسان — كن السبب في الخير</div>
+          <div style={{fontWeight:800,fontSize:16,marginBottom:6}}>{isAr ? 'ابدأ رحلة العطاء' : 'Start Your Giving Journey'}</div>
+          <div style={{color:'var(--text-secondary)',fontSize:13,marginBottom:16}}>{isAr ? 'تبرعك الأول يغير حياة إنسان — كن السبب في الخير' : 'Your first donation changes a life — be the cause of good'}</div>
           <button className="btn btn-primary" style={{width:'auto',padding:'10px 28px'}} onClick={onViewAll}>
-            <i className="bi bi-heart-fill"></i> تصفح الحالات
+            <i className="bi bi-heart-fill me-1"></i> {isAr ? 'تصفح الحالات' : 'Browse Cases'}
           </button>
         </div>
       )}
 
       {/* Recommended Cases */}
       <div className="section-header">
-        <div className="section-title"><div className="section-bar"></div>حالات مقترحة لك</div>
-        <div className="section-action" onClick={onViewAll}>عرض الكل <i className="bi bi-chevron-left"></i></div>
+        <div className="section-title"><div className="section-bar"></div>{isAr ? 'حالات مقترحة لك' : 'Recommended Cases'}</div>
+        <div className="section-action" onClick={onViewAll}>{isAr ? 'عرض الكل' : 'View All'} <i className={`bi ${isAr?'bi-chevron-left':'bi-chevron-right'}`}></i></div>
       </div>
       {recommended.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-heart"></i><h3>لا توجد حالات حالياً</h3><p>سنبلغك فور توفر حالات جديدة</p></div></div>
+        <div className="card"><div className="empty-state"><i className="bi bi-heart"></i><h3>{isAr ? 'لا توجد حالات حالياً' : 'No cases currently available'}</h3><p>{isAr ? 'سنبلغك فور توفر حالات جديدة' : 'We will notify you when new cases are available'}</p></div></div>
       ) : (
         <div className="cases-grid">
-          {recommended.map(c=><CaseCard key={c.id} c={c} onClick={()=>onCaseClick(c)} />)}
+          {recommended.map(c=><CaseCard key={c.id} c={c} onClick={()=>onCaseClick(c)} isAr={isAr} />)}
         </div>
       )}
     </div>
@@ -596,11 +620,12 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
 // ═══════════════════════════════════════
 // CASE CARD
 // ═══════════════════════════════════════
-function CaseCard({c, onClick}) {
+function CaseCard({c, onClick, isAr}) {
   const target = c.targetAmount||c.amountRequired||0;
   const raised = c.raisedAmount||c.amountRaised||0;
   const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
   const firstImg = (c.imageUrls && c.imageUrls.length > 0) ? c.imageUrls[0] : c.imageUrl || c.documentUrl || '';
+  const catText = c.category==='مالي'?(isAr?'مالي':'Financial'):c.category==='عيني'?(isAr?'عيني':'In-Kind'):c.category==='طبي'?(isAr?'طبي':'Medical'):(c.category||(isAr?'عام':'General'));
 
   return (
     <div className="case-card" onClick={onClick}>
@@ -610,24 +635,24 @@ function CaseCard({c, onClick}) {
         )}
         <div className="case-card-overlay"></div>
         <div className="case-card-badges">
-          <span className="badge badge-cat">{c.category||'عام'}</span>
-          {(c.urgencyLevel==='عاجل'||c.urgencyLevel==='urgent')&&<span className="badge badge-urgent">🔴 عاجل</span>}
-          {c.urgencyLevel==='متوسط'&&<span className="badge badge-medium">متوسط</span>}
+          <span className="badge badge-cat">{catText}</span>
+          {(c.urgencyLevel==='عاجل'||c.urgencyLevel==='urgent')&&<span className="badge badge-urgent">🔴 {isAr ? 'عاجل' : 'Urgent'}</span>}
+          {c.urgencyLevel==='متوسط'&&<span className="badge badge-medium">{isAr ? 'متوسط' : 'Medium'}</span>}
         </div>
       </div>
       <div className="case-card-body">
-        <div className="case-card-title">{c.title||'بدون عنوان'}</div>
+        <div className="case-card-title">{c.title || (isAr ? 'بدون عنوان' : 'Untitled')}</div>
         <div className="case-card-desc">{c.description||c.story||'—'}</div>
         {c.category==='مالي' && target > 0 && (
           <div className="case-card-progress">
             <div className="case-card-progress-labels">
-              <span className="text-brand bold">تم جمع: {fmtNum(raised)} ج.س</span>
+              <span className="text-brand bold">{isAr ? 'تم جمع:' : 'Raised:'} {fmtNum(raised)} {isAr ? 'ج.س' : 'SDG'}</span>
               <span className="text-muted">{pct}%</span>
             </div>
             <div className="progress-bar"><div className="progress-fill animated" style={{width:`${pct}%`}}></div></div>
           </div>
         )}
-        <button className="case-card-btn"><i className="bi bi-heart-fill"></i>تبرع الآن</button>
+        <button className="case-card-btn"><i className="bi bi-heart-fill me-1"></i>{isAr ? 'تبرع الآن' : 'Donate Now'}</button>
       </div>
     </div>
   );
@@ -636,7 +661,7 @@ function CaseCard({c, onClick}) {
 // ═══════════════════════════════════════
 // CASES PAGE
 // ═══════════════════════════════════════
-function CasesPage({cases, onCaseClick}) {
+function CasesPage({cases, onCaseClick, isAr}) {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('الكل');
   const cats = ['الكل','مالي','عيني','طبي'];
@@ -645,27 +670,35 @@ function CasesPage({cases, onCaseClick}) {
     return matchQ && (cat==='الكل' || c.category===cat);
   });
 
+  const catLabel = (c) => {
+    if (c === 'الكل') return isAr ? 'الكل' : 'All';
+    if (c === 'مالي') return isAr ? 'مالي' : 'Financial';
+    if (c === 'عيني') return isAr ? 'عيني' : 'In-Kind';
+    if (c === 'طبي') return isAr ? 'طبي' : 'Medical';
+    return c;
+  };
+
   return (
     <div>
       {/* Search & Filters */}
       <div className="search-bar" style={{marginBottom:20}}>
         <i className="bi bi-search"></i>
-        <input placeholder="ابحث عن حالة..." value={q} onChange={e=>setQ(e.target.value)} />
+        <input placeholder={isAr ? "ابحث عن حالة..." : "Search cases..."} value={q} onChange={e=>setQ(e.target.value)} />
         {q && <i className="bi bi-x-lg" style={{cursor:'pointer'}} onClick={()=>setQ('')}></i>}
       </div>
       <div style={{display:'flex',gap:8,marginBottom:24,flexWrap:'wrap'}}>
         {cats.map(c=>(
           <button key={c} className={`chip ${cat===c?'active':''}`} onClick={()=>setCat(c)}>
-            {c} ({c==='الكل'?cases.length:cases.filter(x=>x.category===c).length})
+            {catLabel(c)} ({c==='الكل'?cases.length:cases.filter(x=>x.category===c).length})
           </button>
         ))}
       </div>
 
       {filtered.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-search"></i><h3>لا توجد حالات مطابقة</h3></div></div>
+        <div className="card"><div className="empty-state"><i className="bi bi-search"></i><h3>{isAr ? 'لا توجد حالات مطابقة' : 'No matching cases found'}</h3></div></div>
       ) : (
         <div className="cases-grid">
-          {filtered.map(c=><CaseCard key={c.id} c={c} onClick={()=>onCaseClick(c)} />)}
+          {filtered.map(c=><CaseCard key={c.id} c={c} onClick={()=>onCaseClick(c)} isAr={isAr} />)}
         </div>
       )}
     </div>
@@ -675,34 +708,37 @@ function CasesPage({cases, onCaseClick}) {
 // ═══════════════════════════════════════
 // CASE DETAIL PAGE
 // ═══════════════════════════════════════
-function CaseDetailPage({c, onBack, onDonate, user, profile}) {
+function CaseDetailPage({c, onBack, onDonate, user, profile, isAr}) {
   const target = c.targetAmount||c.amountRequired||0;
   const raised = c.raisedAmount||c.amountRaised||0;
   const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
   const firstImg = (c.imageUrls && c.imageUrls.length > 0) ? c.imageUrls[0] : c.imageUrl||'';
+  const catText = c.category==='مالي'?(isAr?'مالي':'Financial'):c.category==='عيني'?(isAr?'عيني':'In-Kind'):c.category==='طبي'?(isAr?'طبي':'Medical'):(c.category||'—');
+
   const shareText = `ساهم في دعم حالة إنسانية: ${c.title}\nالمبلغ المطلوب: ${fmtNum(target)} ج.س\nالموقع: ${c.location||'غير محدد'}\n\n🌐 الموقع الإلكتروني:\nhttps://takaful.com\n\n📱 تطبيق الأندرويد:\nhttps://play.google.com/store/apps/details?id=com.takaful.app`;
 
   const handleShare = async (platform) => {
-    // Record share in Firestore
     try {
       await addDoc(collection(db,'shares'),{
         caseId: c.id, caseTitle: c.title, userId: user?.uid||'', platform, timestamp: serverTimestamp()
       });
     } catch(e) {}
     
-    if(platform === 'نسخ الرابط') {
+    if(platform === 'نسخ الرابط' || platform === 'Copy') {
       navigator.clipboard.writeText(shareText);
-      showToast('success','تم نسخ تفاصيل الحالة');
+      showToast('success', isAr ? 'تم نسخ تفاصيل الحالة' : 'Case details copied');
     } else {
-      const url = platform === 'واتساب' ? `https://wa.me/?text=${encodeURIComponent(shareText)}` :
-                  platform === 'تويتر' ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}` : '';
+      const url = (platform === 'واتساب' || platform === 'WhatsApp') ? `https://wa.me/?text=${encodeURIComponent(shareText)}` :
+                  (platform === 'تويتر' || platform === 'X') ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}` : '';
       if(url) window.open(url,'_blank');
     }
   };
 
   return (
     <div>
-      <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}><i className="bi bi-arrow-right"></i> رجوع</button>
+      <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}>
+        <i className={`bi ${isAr?'bi-arrow-right':'bi-arrow-left'} me-1`}></i> {isAr ? 'رجوع' : 'Back'}
+      </button>
       
       {/* Hero Image */}
       {firstImg ? (
@@ -719,34 +755,34 @@ function CaseDetailPage({c, onBack, onDonate, user, profile}) {
           </div>
           <div>
             <div style={{fontSize:18,fontWeight:800}}>{c.title}</div>
-            <div className="text-sm text-brand bold">{c.category} • {c.location||'غير محدد'}</div>
+            <div className="text-sm text-brand bold">{catText} • {c.location || (isAr ? 'غير محدد' : 'Unspecified')}</div>
           </div>
         </div>
         <div style={{borderTop:'1px solid var(--border)',paddingTop:16}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-            <span className="bold text-brand">تم جمع {fmtNum(raised)} ج.س</span>
-            <span className="text-muted">من {fmtNum(target)} ج.س</span>
+            <span className="bold text-brand">{isAr ? 'تم جمع' : 'Raised'} {fmtNum(raised)} {isAr ? 'ج.س' : 'SDG'}</span>
+            <span className="text-muted">{isAr ? 'من' : 'out of'} {fmtNum(target)} {isAr ? 'ج.س' : 'SDG'}</span>
           </div>
           <div className="progress-bar" style={{height:10,borderRadius:10}}>
             <div className="progress-fill animated" style={{width:`${pct}%`,borderRadius:10}}></div>
           </div>
-          <div style={{textAlign:'left',marginTop:6,fontSize:13,color:'var(--gold-500)',fontWeight:700}}>{pct}% مكتمل</div>
+          <div style={{textAlign:isAr?'left':'right',marginTop:6,fontSize:13,color:'var(--gold-500)',fontWeight:700}}>{pct}% {isAr ? 'مكتمل' : 'Completed'}</div>
         </div>
       </div>
 
       {/* Story */}
       <div className="detail-info-card">
-        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>قصة الحالة</div>
-        <div style={{fontSize:14,lineHeight:1.8,color:'var(--text-secondary)'}}>{c.description||c.story||'لا يوجد وصف'}</div>
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>{isAr ? 'قصة الحالة' : 'Case Story'}</div>
+        <div style={{fontSize:14,lineHeight:1.8,color:'var(--text-secondary)'}}>{c.description||c.story||(isAr ? 'لا يوجد وصف' : 'No description available')}</div>
       </div>
 
       {/* Extra Images */}
       {c.imageUrls && c.imageUrls.length > 1 && (
         <div className="detail-info-card">
-          <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>صور الحالة ({c.imageUrls.length})</div>
+          <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>{isAr ? 'صور الحالة' : 'Case Photos'} ({c.imageUrls.length})</div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10}}>
             {c.imageUrls.map((img,i)=>(
-              <img key={i} src={img} alt={`صورة ${i+1}`} style={{width:'100%',height:120,objectFit:'cover',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)'}} />
+              <img key={i} src={img} alt={`Photo ${i+1}`} style={{width:'100%',height:120,objectFit:'cover',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)'}} />
             ))}
           </div>
         </div>
@@ -754,27 +790,27 @@ function CaseDetailPage({c, onBack, onDonate, user, profile}) {
 
       {/* Details */}
       <div className="detail-info-card">
-        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>معلومات إضافية</div>
-        <div className="detail-row"><span className="detail-row-label">الموقع</span><span className="detail-row-value">{c.location||'—'}</span></div>
-        <div className="detail-row"><span className="detail-row-label">التصنيف</span><span className="detail-row-value">{c.category||'—'}</span></div>
-        <div className="detail-row"><span className="detail-row-label">المبلغ المطلوب</span><span className="detail-row-value" style={{color:'var(--gold-500)'}}>{fmtNum(target)} ج.س</span></div>
-        <div className="detail-row"><span className="detail-row-label">المتبقي</span><span className="detail-row-value">{fmtNum(Math.max(0,target-raised))} ج.س</span></div>
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}}>{isAr ? 'معلومات إضافية' : 'Additional Information'}</div>
+        <div className="detail-row"><span className="detail-row-label">{isAr ? 'الموقع' : 'Location'}</span><span className="detail-row-value">{c.location||'—'}</span></div>
+        <div className="detail-row"><span className="detail-row-label">{isAr ? 'التصنيف' : 'Category'}</span><span className="detail-row-value">{catText}</span></div>
+        <div className="detail-row"><span className="detail-row-label">{isAr ? 'المبلغ المطلوب' : 'Target Amount'}</span><span className="detail-row-value" style={{color:'var(--gold-500)'}}>{fmtNum(target)} {isAr ? 'ج.س' : 'SDG'}</span></div>
+        <div className="detail-row"><span className="detail-row-label">{isAr ? 'المتبقي' : 'Remaining'}</span><span className="detail-row-value">{fmtNum(Math.max(0,target-raised))} {isAr ? 'ج.س' : 'SDG'}</span></div>
       </div>
 
       {/* Share */}
       <div className="detail-info-card">
-        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:4}}>شارك الحملة مع أصدقائك</div>
-        <div className="text-sm text-muted" style={{marginBottom:14}}>الدال على الخير كفاعله ♥</div>
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:4}}>{isAr ? 'شارك الحملة مع أصدقائك' : 'Share this campaign with friends'}</div>
+        <div className="text-sm text-muted" style={{marginBottom:14}}>{isAr ? 'الدال على الخير كفاعله ♥' : 'Whoever guides to good has a reward like the doer ♥'}</div>
         <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
-          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('واتساب')} style={{flex:1}}><i className="bi bi-whatsapp" style={{color:'#25D366'}}></i>واتساب</button>
-          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('تويتر')} style={{flex:1}}><i className="bi bi-twitter-x"></i>إكس</button>
-          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('نسخ الرابط')} style={{flex:1}}><i className="bi bi-copy"></i>نسخ</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('واتساب')} style={{flex:1}}><i className="bi bi-whatsapp me-1" style={{color:'#25D366'}}></i>{isAr ? 'واتساب' : 'WhatsApp'}</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('تويتر')} style={{flex:1}}><i className="bi bi-twitter-x me-1"></i>{isAr ? 'إكس' : 'X'}</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>handleShare('نسخ الرابط')} style={{flex:1}}><i className="bi bi-copy me-1"></i>{isAr ? 'نسخ' : 'Copy'}</button>
         </div>
       </div>
 
       {/* Donate Button */}
       <button className="btn btn-donate" style={{width:'100%',marginTop:8}} onClick={onDonate}>
-        <i className="bi bi-heart-fill"></i>تبرع الآن
+        <i className="bi bi-heart-fill me-1"></i>{isAr ? 'تبرع الآن' : 'Donate Now'}
       </button>
     </div>
   );
@@ -783,7 +819,7 @@ function CaseDetailPage({c, onBack, onDonate, user, profile}) {
 // ═══════════════════════════════════════
 // DONATION FORM PAGE
 // ═══════════════════════════════════════
-function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
+function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
   const [donationType, setDonationType] = useState(c?.category || 'مالي');
   const [amount, setAmount] = useState('');
   const [amountOrItem, setAmountOrItem] = useState('');
@@ -795,9 +831,14 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
   const [transactionId, setTransactionId] = useState('');
   const [saving, setSaving] = useState(false);
   const [selectedCaseId, setSelectedCaseId] = useState(c?.id || '');
-  const [selectedCaseTitle, setSelectedCaseTitle] = useState(c?.title || 'تبرع عام');
+  const [selectedCaseTitle, setSelectedCaseTitle] = useState(c?.title || (isAr ? 'تبرع عام' : 'General Donation'));
 
-  const payments = ['بنك الخرطوم (بنكك)', 'بنك النيل (صح)', 'بطاقة بنك الخرطوم (Visa/Mastercard)', 'بنكك | PAY (QR)'];
+  const payments = [
+    isAr ? 'بنك الخرطوم (بنكك)' : 'Bank of Khartoum (BOK)',
+    isAr ? 'بنك النيل (صح)' : 'Nile Bank (Sah)',
+    isAr ? 'بطاقة بنك الخرطوم (Visa/Mastercard)' : 'Bank Card (Visa/Mastercard)',
+    isAr ? 'بنكك | PAY (QR)' : 'BOK PAY (QR)'
+  ];
   const [cardNumber, setCardNumber] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [cvv, setCvv] = useState('');
@@ -805,14 +846,14 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
 
   const handleDonate = async () => {
     const amt = parseFloat(amount) || 0;
-    if(donationType !== 'عيني' && amt <= 0){ showToast('error','يرجى إدخال مبلغ صحيح'); return; }
-    if(donationType === 'عيني' && !amountOrItem.trim()){ showToast('error','يرجى وصف التبرع العيني'); return; }
-    if(!payment){ showToast('error','يرجى اختيار طريقة الدفع'); return; }
-    if(payment && donationType !== 'عيني' && !payment.includes('بطاقة') && !transactionId.trim()){ showToast('error','يرجى إدخال الرقم المرجعي للعملية'); return; }
-    if(!payment.includes('بطاقة') && !receiptFile){ showToast('error','يرجى إرفاق إيصال التحويل'); return; }
-    if(payment.includes('بطاقة')) {
+    if(donationType !== 'عيني' && amt <= 0){ showToast('error', isAr ? 'يرجى إدخال مبلغ صحيح' : 'Please enter a valid amount'); return; }
+    if(donationType === 'عيني' && !amountOrItem.trim()){ showToast('error', isAr ? 'يرجى وصف التبرع العيني' : 'Please describe the in-kind donation'); return; }
+    if(!payment){ showToast('error', isAr ? 'يرجى اختيار طريقة الدفع' : 'Please select a payment method'); return; }
+    if(payment && donationType !== 'عيني' && !payment.includes('بطاقة') && !payment.includes('Card') && !transactionId.trim()){ showToast('error', isAr ? 'يرجى إدخال الرقم المرجعي للعملية' : 'Please enter the transaction ID'); return; }
+    if(!payment.includes('بطاقة') && !payment.includes('Card') && !receiptFile){ showToast('error', isAr ? 'يرجى إرفاق إيصال التحويل' : 'Please attach transfer receipt'); return; }
+    if(payment.includes('بطاقة') || payment.includes('Card')) {
       if(!cardNumber || !expiryDate || !cvv || !cardHolder) {
-        showToast('error', 'يرجى إدخال جميع بيانات البطاقة البنكية'); return;
+        showToast('error', isAr ? 'يرجى إدخال جميع بيانات البطاقة البنكية' : 'Please fill all bank card details'); return;
       }
     }
 
@@ -822,12 +863,11 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
       let ocrText = '';
       let aiSuspicionFlag = false;
 
-      if(receiptFile && !payment.includes('بطاقة')) {
-        showToast('success', 'جارٍ التحليل الذكي للإشعار (AI)... الرجاء الانتظار');
+      if(receiptFile && !payment.includes('بطاقة') && !payment.includes('Card')) {
+        showToast('success', isAr ? 'جارٍ التحليل الذكي للإشعار (AI)... الرجاء الانتظار' : 'AI analyzing receipt... Please wait');
         try {
           const { data: { text } } = await Tesseract.recognize(receiptFile, 'ara+eng', { logger: m => console.log(m) });
           ocrText = text;
-          // Simple heuristic validation:
           const lowerText = text.toLowerCase();
           const hasTransactionId = transactionId.trim() && lowerText.includes(transactionId.trim().toLowerCase());
           const hasSuccessKeyword = lowerText.includes('نجاح') || lowerText.includes('success') || lowerText.includes('مكتمل') || lowerText.includes('completed') || lowerText.includes('successful');
@@ -854,53 +894,55 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
         userId: user.uid,
         donorName: profile.name || '',
         amount: donationType === 'عيني' ? 0 : amt,
-        amountOrItem: donationType === 'عيني' ? amountOrItem.trim() : `${fmtNum(amt)} ج.س`,
+        amountOrItem: donationType === 'عيني' ? amountOrItem.trim() : `${fmtNum(amt)} ${isAr?'ج.س':'SDG'}`,
         paymentMethod: payment,
         category: donationType,
         donorMessage: donorMessage.trim(),
-        transactionId: payment.includes('بطاقة') ? 'CARD_' + Date.now() : transactionId.trim(),
+        transactionId: (payment.includes('بطاقة') || payment.includes('Card')) ? 'CARD_' + Date.now() : transactionId.trim(),
         isRecurring: isRecurring && donationType === 'مالي',
         recurringInterval: recurringInterval,
         receiptUrl: receiptUrl,
         ocrText: ocrText,
         aiSuspicionFlag: aiSuspicionFlag,
-        cardNumber: payment.includes('بطاقة') ? cardNumber.slice(-4) : null,
-        status: payment.includes('بطاقة') ? 'قيد المراجعة' : 'قيد الجمع',
+        cardNumber: (payment.includes('بطاقة') || payment.includes('Card')) ? cardNumber.slice(-4) : null,
+        status: (payment.includes('بطاقة') || payment.includes('Card')) ? 'قيد المراجعة' : 'قيد الجمع',
         timestamp: serverTimestamp(),
         createdAt: serverTimestamp(),
         date: new Intl.DateTimeFormat('ar',{year:'numeric',month:'long',day:'numeric'}).format(new Date())
       };
       await addDoc(collection(db,'donations'), donationData);
-      showToast('success','تم إرسال تبرعك وإيصال التحويل بنجاح! جزاك الله خيراً 💚');
+      showToast('success', isAr ? 'تم إرسال تبرعك وإيصال التحويل بنجاح! جزاك الله خيراً 💚' : 'Donation & receipt submitted successfully! Thank you 💚');
       onSuccess();
     } catch(e) {
-      showToast('error','خطأ: '+e.message);
+      showToast('error', (isAr ? 'خطأ: ' : 'Error: ') + e.message);
     } finally { setSaving(false); }
   };
 
   return (
     <div>
-      <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}><i className="bi bi-arrow-right"></i> رجوع</button>
+      <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}>
+        <i className={`bi ${isAr?'bi-arrow-right':'bi-arrow-left'} me-1`}></i> {isAr ? 'رجوع' : 'Back'}
+      </button>
       
       <div className="card" style={{padding:24}}>
         <div style={{textAlign:'center',marginBottom:24}}>
           <div style={{width:56,height:56,borderRadius:'50%',background:'rgba(16,185,129,0.15)',display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:12}}>
             <i className="bi bi-heart-fill" style={{fontSize:24,color:'var(--brand-500)'}}></i>
           </div>
-          <h2 style={{fontSize:20,fontWeight:800}}>تقديم تبرع</h2>
+          <h2 style={{fontSize:20,fontWeight:800}}>{isAr ? 'تقديم تبرع' : 'Make a Donation'}</h2>
           <p className="text-muted text-sm">{selectedCaseTitle}</p>
         </div>
 
         {/* Case selector if no case */}
         {!c && (
           <div className="form-group">
-            <label className="form-label">تبرع لصالح</label>
+            <label className="form-label">{isAr ? 'تبرع لصالح' : 'Donate for'}</label>
             <select className="form-input" value={selectedCaseId} onChange={e=>{
               const val = e.target.value;
               setSelectedCaseId(val);
-              setSelectedCaseTitle(val ? (cases.find(x=>x.id===val)?.title||'') : 'تبرع عام');
+              setSelectedCaseTitle(val ? (cases.find(x=>x.id===val)?.title||'') : (isAr ? 'تبرع عام' : 'General Donation'));
             }}>
-              <option value="">تبرع عام</option>
+              <option value="">{isAr ? 'تبرع عام' : 'General Donation'}</option>
               {cases.map(cs=><option key={cs.id} value={cs.id}>{cs.title}</option>)}
             </select>
           </div>
@@ -908,10 +950,12 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
 
         {/* Donation Type */}
         <div className="form-group">
-          <label className="form-label">نوع التبرع</label>
+          <label className="form-label">{isAr ? 'نوع التبرع' : 'Donation Type'}</label>
           <div style={{display:'flex',gap:8}}>
             {['مالي','عيني','طبي'].map(t=>(
-              <button key={t} className={`chip ${donationType===t?'active':''}`} onClick={()=>setDonationType(t)}>{t}</button>
+              <button key={t} className={`chip ${donationType===t?'active':''}`} onClick={()=>setDonationType(t)}>
+                {isAr ? t : (t==='مالي'?'Financial':t==='عيني'?'In-Kind':'Medical')}
+              </button>
             ))}
           </div>
         </div>
@@ -919,12 +963,12 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
         {/* Amount */}
         {donationType === 'عيني' ? (
           <div className="form-group">
-            <label className="form-label">اسم العنصر والكمية *</label>
-            <input className="form-input" value={amountOrItem} onChange={e=>setAmountOrItem(e.target.value)} placeholder="مثال: 10 بطانيات" />
+            <label className="form-label">{isAr ? 'اسم العنصر والكمية *' : 'Item Name & Quantity *'}</label>
+            <input className="form-input" value={amountOrItem} onChange={e=>setAmountOrItem(e.target.value)} placeholder={isAr ? "مثال: 10 بطانيات" : "e.g., 10 blankets"} />
           </div>
         ) : (
           <div className="form-group">
-            <label className="form-label">المبلغ (ج.س) *</label>
+            <label className="form-label">{isAr ? 'المبلغ (ج.س) *' : 'Amount (SDG) *'}</label>
             <input className="form-input" type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" />
             <div className="amount-chips">
               {['50','100','500','1000'].map(a=>(
@@ -936,7 +980,7 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
 
         {/* Payment Method */}
         <div className="form-group">
-          <label className="form-label">طريقة الدفع *</label>
+          <label className="form-label">{isAr ? 'طريقة الدفع *' : 'Payment Method *'}</label>
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {payments.map(m=>(
               <div key={m} className={`payment-option ${payment===m?'selected':''}`} onClick={()=>setPayment(m)}>
@@ -948,99 +992,101 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
         </div>
 
         {/* Bank Info for BBAN (Khartoum & Nile) */}
-        {(payment === 'بنك الخرطوم (بنكك)' || payment === 'بنك النيل (صح)') && (
+        {(payment.includes('الخرطوم') || payment.includes('Khartoum') || payment.includes('النيل') || payment.includes('Nile')) && !payment.includes('بطاقة') && !payment.includes('Card') && !payment.includes('QR') && (
           <div className="bank-info-card">
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
               <i className="bi bi-bank" style={{color:'var(--gold-500)',fontSize:20}}></i>
-              <span className="bold" style={{color:'var(--gold-500)'}}>معلومات التحويل المباشر</span>
+              <span className="bold" style={{color:'var(--gold-500)'}}>{isAr ? 'معلومات التحويل المباشر' : 'Direct Transfer Information'}</span>
             </div>
-            {payment === 'بنك الخرطوم (بنكك)' ? (
+            {(payment.includes('الخرطوم') || payment.includes('Khartoum')) ? (
               <>
-                <div className="bank-label">بنك الخرطوم (بنكك):</div>
+                <div className="bank-label">{isAr ? 'بنك الخرطوم (بنكك):' : 'Bank of Khartoum (BOK):'}</div>
                 <div className="bank-value" style={{letterSpacing: '1px'}}>04037418080001</div>
-                <div className="text-xs text-muted" style={{marginBottom: 10}}>باسم: منظمة تكافل الإنسانية</div>
-                <button className="bank-copy-btn" onClick={()=>{navigator.clipboard.writeText('04037418080001');showToast('success','تم نسخ رقم الحساب')}}><i className="bi bi-clipboard"></i>نسخ الرقم</button>
+                <div className="text-xs text-muted" style={{marginBottom: 10}}>{isAr ? 'باسم: منظمة تكافل الإنسانية' : 'Account Name: Takaful Humanitarian Org'}</div>
+                <button className="bank-copy-btn" onClick={()=>{navigator.clipboard.writeText('04037418080001');showToast('success', isAr ? 'تم نسخ رقم الحساب' : 'Account number copied')}}><i className="bi bi-clipboard me-1"></i>{isAr ? 'نسخ الرقم' : 'Copy Number'}</button>
               </>
             ) : (
               <>
-                <div className="bank-label">بنك النيل (صح Sah):</div>
+                <div className="bank-label">{isAr ? 'بنك النيل (صح Sah):' : 'Nile Bank (Sah):'}</div>
                 <div className="bank-value" style={{letterSpacing: '1px'}}>07748513148999</div>
-                <div className="text-xs text-muted" style={{marginBottom: 10}}>باسم: منظمة تكافل الإنسانية</div>
-                <button className="bank-copy-btn" onClick={()=>{navigator.clipboard.writeText('07748513148999');showToast('success','تم نسخ رقم الحساب')}}><i className="bi bi-clipboard"></i>نسخ الرقم</button>
+                <div className="text-xs text-muted" style={{marginBottom: 10}}>{isAr ? 'باسم: منظمة تكافل الإنسانية' : 'Account Name: Takaful Humanitarian Org'}</div>
+                <button className="bank-copy-btn" onClick={()=>{navigator.clipboard.writeText('07748513148999');showToast('success', isAr ? 'تم نسخ رقم الحساب' : 'Account number copied')}}><i className="bi bi-clipboard me-1"></i>{isAr ? 'نسخ الرقم' : 'Copy Number'}</button>
               </>
             )}
             
             <div className="form-group" style={{marginTop:16}}>
-              <label className="form-label">الرقم المرجعي للعملية (Transaction ID) *</label>
-              <input className="form-input" type="text" value={transactionId} onChange={e=>setTransactionId(e.target.value)} placeholder="مثال: 123456789" />
-              <div className="text-xs text-muted" style={{marginTop: 4}}>تجد هذا الرقم في إشعار التحويل البنكي أو رسالة الـ SMS</div>
+              <label className="form-label">{isAr ? 'الرقم المرجعي للعملية (Transaction ID) *' : 'Transaction ID *'}</label>
+              <input className="form-input" type="text" value={transactionId} onChange={e=>setTransactionId(e.target.value)} placeholder={isAr ? "مثال: 123456789" : "e.g. 123456789"} />
+              <div className="text-xs text-muted" style={{marginTop: 4}}>{isAr ? 'تجد هذا الرقم في إشعار التحويل البنكي أو رسالة الـ SMS' : 'Found in bank receipt or SMS notification'}</div>
             </div>
             
             <div className="form-group" style={{marginTop:16}}>
-              <label className="form-label">إرفاق إيصال التحويل *</label>
+              <label className="form-label">{isAr ? 'إرفاق إيصال التحويل *' : 'Attach Transfer Receipt *'}</label>
               <input className="form-input" type="file" accept="image/*,.pdf" onChange={e=>setReceiptFile(e.target.files[0])} />
             </div>
           </div>
         )}
 
         {/* Bank Info for QR */}
-        {payment === 'بنكك | PAY (QR)' && (
+        {(payment.includes('QR') || payment.includes('رمز')) && (
           <div className="bank-info-card">
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
               <i className="bi bi-qr-code" style={{color:'var(--gold-500)',fontSize:20}}></i>
-              <span className="bold" style={{color:'var(--gold-500)'}}>الدفع عبر رمز الاستجابة السريعة (QR)</span>
+              <span className="bold" style={{color:'var(--gold-500)'}}>{isAr ? 'الدفع عبر رمز الاستجابة السريعة (QR)' : 'Payment via QR Code'}</span>
             </div>
             <div style={{textAlign: 'center', margin: '15px 0'}}>
               <div style={{display: 'inline-block', padding: 10, background: '#fff', borderRadius: 8}}>
                 <img src="img/بنكك.jpg" alt="رمز QR الخاص بتكافل" style={{width: 150, height: 150, display: 'block', objectFit: 'contain'}} />
               </div>
-              <p className="text-xs text-muted" style={{marginTop: 8}}>امسح الرمز ضوئياً عبر تطبيق بنكك لإتمام الدفع السريع</p>
+              <p className="text-xs text-muted" style={{marginTop: 8}}>{isAr ? 'امسح الرمز ضوئياً عبر تطبيق بنكك لإتمام الدفع السريع' : 'Scan QR code via BOK app for fast payment'}</p>
             </div>
             
             <div className="form-group" style={{marginTop:16}}>
-              <label className="form-label">الرقم المرجعي للعملية (Transaction ID) *</label>
-              <input className="form-input" type="text" value={transactionId} onChange={e=>setTransactionId(e.target.value)} placeholder="مثال: 123456789" />
-              <div className="text-xs text-muted" style={{marginTop: 4}}>تجد هذا الرقم في إشعار التحويل البنكي أو رسالة الـ SMS</div>
+              <label className="form-label">{isAr ? 'الرقم المرجعي للعملية (Transaction ID) *' : 'Transaction ID *'}</label>
+              <input className="form-input" type="text" value={transactionId} onChange={e=>setTransactionId(e.target.value)} placeholder={isAr ? "مثال: 123456789" : "e.g. 123456789"} />
+              <div className="text-xs text-muted" style={{marginTop: 4}}>{isAr ? 'تجد هذا الرقم في إشعار التحويل البنكي أو رسالة الـ SMS' : 'Found in bank receipt or SMS notification'}</div>
             </div>
 
             <div className="form-group" style={{marginTop:16}}>
-              <label className="form-label">إرفاق إيصال الدفع (التحويل) *</label>
+              <label className="form-label">{isAr ? 'إرفاق إيصال الدفع (التحويل) *' : 'Attach Payment Receipt *'}</label>
               <input className="form-input" type="file" accept="image/*,.pdf" onChange={e=>setReceiptFile(e.target.files[0])} />
             </div>
           </div>
         )}
+
         {/* Card Info */}
-        {payment === 'بطاقة بنك الخرطوم (Visa/Mastercard)' && (
+        {(payment.includes('بطاقة') || payment.includes('Card')) && (
           <div className="bank-info-card">
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
               <i className="bi bi-credit-card" style={{color:'var(--gold-500)',fontSize:20}}></i>
-              <span className="bold" style={{color:'var(--gold-500)'}}>بيانات البطاقة البنكية</span>
+              <span className="bold" style={{color:'var(--gold-500)'}}>{isAr ? 'بيانات البطاقة البنكية' : 'Bank Card Details'}</span>
             </div>
             <div className="form-group" style={{marginTop:16}}>
-              <label className="form-label">رقم البطاقة *</label>
-              <input className="form-input" type="text" value={cardNumber} onChange={e=>setCardNumber(e.target.value)} placeholder="16 رقم" maxLength={16} dir="ltr" style={{textAlign:'left'}} />
+              <label className="form-label">{isAr ? 'رقم البطاقة *' : 'Card Number *'}</label>
+              <input className="form-input" type="text" value={cardNumber} onChange={e=>setCardNumber(e.target.value)} placeholder={isAr ? "16 رقم" : "16 digits"} maxLength={16} dir="ltr" style={{textAlign:'left'}} />
             </div>
             <div style={{display:'flex', gap:10}}>
               <div className="form-group" style={{flex:1}}>
-                <label className="form-label">تاريخ الانتهاء *</label>
+                <label className="form-label">{isAr ? 'تاريخ الانتهاء *' : 'Expiry Date *'}</label>
                 <input className="form-input" type="text" value={expiryDate} onChange={e=>setExpiryDate(e.target.value)} placeholder="MM/YY" dir="ltr" style={{textAlign:'left'}} />
               </div>
               <div className="form-group" style={{flex:1}}>
                 <label className="form-label">CVV *</label>
-                <input className="form-input" type="password" value={cvv} onChange={e=>setCvv(e.target.value)} placeholder="3 أرقام" maxLength={3} dir="ltr" style={{textAlign:'left'}} />
+                <input className="form-input" type="password" value={cvv} onChange={e=>setCvv(e.target.value)} placeholder={isAr ? "3 أرقام" : "3 digits"} maxLength={3} dir="ltr" style={{textAlign:'left'}} />
               </div>
             </div>
             <div className="form-group" style={{marginTop:4}}>
-              <label className="form-label">الاسم على البطاقة *</label>
-              <input className="form-input" type="text" value={cardHolder} onChange={e=>setCardHolder(e.target.value)} placeholder="الاسم الكامل" />
+              <label className="form-label">{isAr ? 'الاسم على البطاقة *' : 'Name on Card *'}</label>
+              <input className="form-input" type="text" value={cardHolder} onChange={e=>setCardHolder(e.target.value)} placeholder={isAr ? "الاسم الكامل" : "Full Name"} />
             </div>
           </div>
         )}
-        {/* Donor Message (Available for all cash donations) */}
+
+        {/* Donor Message */}
         {donationType !== 'عيني' && payment && (
           <div className="form-group" style={{marginTop:16}}>
-            <label className="form-label">رسالة مع التبرع (اختياري)</label>
-            <textarea className="form-input" rows="2" value={donorMessage} onChange={e=>setDonorMessage(e.target.value)} placeholder="أدعو لي بالشفاء..." style={{resize:'vertical'}}></textarea>
+            <label className="form-label">{isAr ? 'رسالة مع التبرع (اختياري)' : 'Message with Donation (Optional)'}</label>
+            <textarea className="form-input" rows="2" value={donorMessage} onChange={e=>setDonorMessage(e.target.value)} placeholder={isAr ? "أدعو لي بالشفاء..." : "Pray for my healing..."} style={{resize:'vertical'}}></textarea>
           </div>
         )}
 
@@ -1049,14 +1095,14 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
           <div style={{marginTop:16}}>
             <div className={`recurring-card ${isRecurring?'active':''}`}>
               <div>
-                <div className="bold">تبرع دوري</div>
-                <div className="text-xs text-muted">يتكرر تلقائياً كل فترة</div>
+                <div className="bold">{isAr ? 'تبرع دوري' : 'Recurring Donation'}</div>
+                <div className="text-xs text-muted">{isAr ? 'يتكرر تلقائياً كل فترة' : 'Repeats automatically'}</div>
               </div>
               <div className={`toggle ${isRecurring?'active':''}`} onClick={()=>setIsRecurring(!isRecurring)}></div>
             </div>
             {isRecurring && (
               <div className="recurring-options">
-                {[['weekly','أسبوعي'],['monthly','شهري'],['yearly','سنوي']].map(([k,l])=>(
+                {[['weekly', isAr?'أسبوعي':'Weekly'],['monthly', isAr?'شهري':'Monthly'],['yearly', isAr?'سنوي':'Yearly']].map(([k,l])=>(
                   <button key={k} className={`chip ${recurringInterval===k?'active':''}`} onClick={()=>setRecurringInterval(k)} style={{fontSize:12}}>{l}</button>
                 ))}
               </div>
@@ -1066,7 +1112,7 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
 
         {/* Submit */}
         <button className="btn btn-donate" style={{width:'100%',marginTop:24}} onClick={handleDonate} disabled={saving}>
-          {saving ? <><div className="spinner"></div>جارٍ الإرسال...</> : <><i className="bi bi-heart-fill"></i>تأكيد التبرع الآن</>}
+          {saving ? <><div className="spinner"></div>{isAr ? 'جارٍ الإرسال...' : 'Sending...'}</> : <><i className="bi bi-heart-fill me-1"></i>{isAr ? 'تأكيد التبرع الآن' : 'Confirm Donation Now'}</>}
         </button>
       </div>
     </div>
@@ -1076,15 +1122,15 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess}) {
 // ═══════════════════════════════════════
 // DONATIONS PAGE
 // ═══════════════════════════════════════
-function DonationsPage({donations}) {
+function DonationsPage({donations, isAr}) {
   return (
     <div>
       <div className="section-header" style={{marginBottom:20}}>
-        <div className="section-title"><div className="section-bar"></div>سجل تبرعاتي</div>
-        <span className="badge badge-cat">{donations.length} تبرع</span>
+        <div className="section-title"><div className="section-bar"></div>{isAr ? 'سجل تبرعاتي' : 'My Donation History'}</div>
+        <span className="badge badge-cat">{donations.length} {isAr ? 'تبرع' : 'Donations'}</span>
       </div>
       {donations.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-gift"></i><h3>لم تقم بأي تبرع بعد</h3><p>ابدأ بدعم حالة إنسانية اليوم!</p></div></div>
+        <div className="card"><div className="empty-state"><i className="bi bi-gift"></i><h3>{isAr ? 'لم تقم بأي تبرع بعد' : 'You have not made any donations yet'}</h3><p>{isAr ? 'ابدأ بدعم حالة إنسانية اليوم!' : 'Start supporting a humanitarian case today!'}</p></div></div>
       ) : (
         <div className="card">
           {donations.map(d => {
@@ -1096,13 +1142,15 @@ function DonationsPage({donations}) {
                      style={{color:d.status==='تم التوزيع'?'var(--brand-500)':d.status==='تم الاستلام'?'var(--blue)':'var(--gold-500)'}}></i>
                 </div>
                 <div style={{flex:1,minWidth:0}}>
-                  <div className="bold truncate" style={{fontSize:15}}>{d.caseTitle||'تبرع عام'}</div>
-                  <div className="text-sm text-muted">{d.category||'مالي'} • {d.paymentMethod||'—'}</div>
+                  <div className="bold truncate" style={{fontSize:15}}>{d.caseTitle || (isAr ? 'تبرع عام' : 'General Donation')}</div>
+                  <div className="text-sm text-muted">{d.category==='مالي'?(isAr?'مالي':'Financial'):d.category==='عيني'?(isAr?'عيني':'In-Kind'):d.category==='طبي'?(isAr?'طبي':'Medical'):(d.category||'—')} • {d.paymentMethod||'—'}</div>
                   <div className="text-xs text-muted" style={{marginTop:2}}>{fmtDate(d.createdAt||d.timestamp)}</div>
                 </div>
-                <div style={{textAlign:'left'}}>
-                  <div className="bold text-brand" style={{fontSize:15}}>{d.amountOrItem||`${fmtNum(d.amount)} ج.س`}</div>
-                  <span className={`badge ${statusClass}`} style={{marginTop:4}}>{d.status||'قيد الجمع'}</span>
+                <div style={{textAlign:isAr?'left':'right'}}>
+                  <div className="bold text-brand" style={{fontSize:15}}>{d.amountOrItem||`${fmtNum(d.amount)} ${isAr?'ج.س':'SDG'}`}</div>
+                  <span className={`badge ${statusClass}`} style={{marginTop:4}}>
+                    {d.status==='تم التوزيع'?(isAr?'تم التوزيع':'Distributed'):d.status==='تم الاستلام'?(isAr?'تم الاستلام':'Received'):(d.status||(isAr?'قيد الجمع':'Collecting'))}
+                  </span>
                 </div>
               </div>
             );
@@ -1116,7 +1164,7 @@ function DonationsPage({donations}) {
 // ═══════════════════════════════════════
 // CHAT PAGE
 // ═══════════════════════════════════════
-function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, sendMsg, profile, doDelMsg, doEditMsg, user}) {
+function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, sendMsg, profile, doDelMsg, doEditMsg, user, isAr}) {
   const msgsEnd = useRef(null);
   const [editingMsg, setEditingMsg] = useState(null);
   useEffect(()=>{ msgsEnd.current?.scrollIntoView({behavior:'smooth'}); },[msgs]);
@@ -1126,36 +1174,36 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
   return (
     <div>
       <div className="section-header" style={{marginBottom:20}}>
-        <div className="section-title"><div className="section-bar"></div>الدعم والمحادثات</div>
+        <div className="section-title"><div className="section-bar"></div>{isAr ? 'الدعم والمحادثات' : 'Support & Chats'}</div>
       </div>
       <div className="chat-container">
         {/* Messages Area */}
         <div className="chat-messages">
           <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',fontWeight:700,display:'flex',alignItems:'center',gap:10}}>
             <i className="bi bi-headset" style={{color:'var(--brand-500)'}}></i>
-            محادثة الدعم
-            {activeChatId && <span className="text-xs text-muted" style={{marginRight:'auto',fontWeight:400}}>متصل</span>}
+            {isAr ? 'محادثة الدعم' : 'Support Chat'}
+            {activeChatId && <span className="text-xs text-muted" style={{marginRight:isAr?'auto':'0',marginLeft:isAr?'0':'auto',fontWeight:400}}>{isAr ? 'متصل' : 'Online'}</span>}
           </div>
           <div className="chat-messages-body">
             {!activeChatId && msgs.length === 0 && (
               <div className="empty-state" style={{padding:40}}>
                 <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
-                <h3>جارٍ تحميل المحادثة...</h3>
-                <p>يتم إنشاء محادثة الدعم الخاصة بك</p>
-                <div className="spinner" style={{width:'2rem',height:'2rem',margin:'16px auto'}}></div>
+                <h3>{isAr ? 'جارٍ تحميل المحادثة...' : 'Loading chat...'}</h3>
+                <p>{isAr ? 'يتم إنشاء محادثة الدعم الخاصة بك' : 'Creating your support chat'}</p>
+                <div className="spinner" style={{width:'2.5rem',height:'2.5rem',margin:'16px auto'}}></div>
               </div>
             )}
             {activeChatId && msgs.length === 0 && (
               <div className="empty-state" style={{padding:40}}>
                 <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
-                <h3>ابدأ محادثة جديدة</h3>
-                <p>فريق الدعم جاهز لمساعدتك</p>
+                <h3>{isAr ? 'ابدأ محادثة جديدة' : 'Start a new conversation'}</h3>
+                <p>{isAr ? 'فريق الدعم جاهز لمساعدتك' : 'Support team is ready to help you'}</p>
               </div>
             )}
             {msgs.map(m=>{
               const isMine = m.sender==='user' || m.senderId === currentUid;
               const photoUrl = m.senderPhotoUrl || m.photoUrl || '';
-              const senderDisplayName = m.senderName || (isMine ? profile.name : 'الدعم');
+              const senderDisplayName = m.senderName || (isMine ? profile.name : (isAr ? 'الدعم' : 'Support'));
               return (
               <div key={m.id} className={`chat-bubble ${isMine?'mine':'theirs'}`} style={{position:'relative'}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
@@ -1168,24 +1216,24 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
                     </div>
                   )}
                   <span className="text-xs" style={{opacity:.7,fontWeight:600}}>{senderDisplayName}</span>
-                  {m.createdAt && <span className="text-xs" style={{opacity:.4,marginRight:'auto'}}>{timeAgo(m.createdAt)}</span>}
+                  {m.createdAt && <span className="text-xs" style={{opacity:.4,marginRight:isAr?'auto':'0',marginLeft:isAr?'0':'auto'}}>{timeAgo(m.createdAt)}</span>}
                 </div>
                 {editingMsg?.id === m.id ? (
                   <div style={{marginTop:8}}>
                     <input className="form-input mb-2" autoFocus style={{fontSize:'13px', padding:'6px', color:'#000'}} value={editingMsg.text} onChange={e=>setEditingMsg({...editingMsg, text:e.target.value})} onKeyDown={e=>{if(e.key==='Enter'){doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}} />
                     <div className="d-flex gap-2 justify-content-end">
-                      <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>إلغاء</button>
-                      <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>حفظ</button>
+                      <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>{isAr ? 'إلغاء' : 'Cancel'}</button>
+                      <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>{isAr ? 'حفظ' : 'Save'}</button>
                     </div>
                   </div>
                 ) : (
-                  <div style={{paddingRight:36}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>(معدل)</span>}</div>
+                  <div style={{paddingRight:isAr?36:0, paddingLeft:isAr?0:36}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>{isAr ? '(معدل)' : '(edited)'}</span>}</div>
                 )}
                 
                 {isMine && !editingMsg && (
-                  <div style={{position:'absolute', top:8, left: 8, display:'flex', gap:6, opacity:0.6, transition:'opacity 0.2s'}}>
-                    <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title="تعديل"><i className="bi bi-pencil"></i></button>
-                    <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title="حذف"><i className="bi bi-trash"></i></button>
+                  <div style={{position:'absolute', top:8, left: isAr?8:'auto', right: isAr?'auto':8, display:'flex', gap:6, opacity:0.6, transition:'opacity 0.2s'}}>
+                    <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
+                    <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title={isAr ? "حذف" : "Delete"}><i className="bi bi-trash"></i></button>
                   </div>
                 )}
               </div>
@@ -1193,7 +1241,7 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
             <div ref={msgsEnd}></div>
           </div>
           <form className="chat-input-bar" onSubmit={sendMsg}>
-            <input className="chat-input" value={msgIn} onChange={e=>setMsgIn(e.target.value)} placeholder="اكتب رسالتك..." disabled={!activeChatId} />
+            <input className="chat-input" value={msgIn} onChange={e=>setMsgIn(e.target.value)} placeholder={isAr ? "اكتب رسالتك..." : "Type your message..."} disabled={!activeChatId} />
             <button type="submit" className="chat-send-btn" disabled={!activeChatId}><i className="bi bi-send-fill"></i></button>
           </form>
         </div>
@@ -1205,7 +1253,7 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
 // ═══════════════════════════════════════
 // PROFILE PAGE
 // ═══════════════════════════════════════
-function ProfilePage({profile, myTotalAmt, casesHelped, dark, setDark, user, setProfile}) {
+function ProfilePage({profile, myTotalAmt, casesHelped, dark, setDark, user, setProfile, isAr}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.name);
   const [phone, setPhone] = useState(profile.phone || '');
@@ -1227,8 +1275,8 @@ function ProfilePage({profile, myTotalAmt, casesHelped, dark, setDark, user, set
       await updateDoc(doc(db,'users',user.uid),{ name: name.trim(), phone: phone.trim(), photoURL, updatedAt: serverTimestamp() });
       setProfile(p=>({...p, name: name.trim(), phone: phone.trim(), photoURL}));
       setEditing(false);
-      showToast('success','تم حفظ التعديلات بنجاح');
-    } catch(e) { showToast('error','خطأ: '+e.message); }
+      showToast('success', isAr ? 'تم حفظ التعديلات بنجاح' : 'Profile updated successfully');
+    } catch(e) { showToast('error', (isAr ? 'خطأ: ' : 'Error: ') + e.message); }
     finally { setSaving(false); setPhotoFile(null); }
   };
 
@@ -1241,46 +1289,46 @@ function ProfilePage({profile, myTotalAmt, casesHelped, dark, setDark, user, set
             {profile.photoURL ? <img src={profile.photoURL} alt="Profile" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} /> : ini(profile.name)}
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name||'متبرع'}</div>
+            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name || (isAr ? 'متبرع' : 'Donor')}</div>
             <div style={{fontSize:13,color:'rgba(255,255,255,0.7)',marginTop:2}}>{profile.email}</div>
             {profile.phone && <div style={{fontSize:13,color:'rgba(255,255,255,0.7)'}}>{profile.phone}</div>}
           </div>
-          <button className="btn btn-icon" onClick={()=>setEditing(true)} style={{background:'rgba(255,255,255,0.15)',color:'#fff',borderRadius:'50%'}}>
+          <button className="btn btn-icon" onClick={()=>setEditing(true)} style={{background:'rgba(255,255,255,0.15)',color:'#fff',borderRadius:'50%'}} title={isAr ? 'تعديل الملف الشخصي' : 'Edit Profile'}>
             <i className="bi bi-pencil-fill"></i>
           </button>
         </div>
         <div className="profile-stats">
           <div className="profile-stat">
-            <div className="profile-stat-label"><i className="bi bi-coin"></i> إجمالي التبرعات</div>
-            <div className="profile-stat-value">{fmtNum(myTotalAmt)} ج.س</div>
+            <div className="profile-stat-label"><i className="bi bi-coin me-1"></i> {isAr ? 'إجمالي التبرعات' : 'Total Donations'}</div>
+            <div className="profile-stat-value">{fmtNum(myTotalAmt)} {isAr ? 'ج.س' : 'SDG'}</div>
           </div>
           <div className="profile-stat">
-            <div className="profile-stat-label"><i className="bi bi-heart-fill"></i> حالات دعمتها</div>
+            <div className="profile-stat-label"><i className="bi bi-heart-fill me-1"></i> {isAr ? 'حالات دعمتها' : 'Supported Cases'}</div>
             <div className="profile-stat-value">{casesHelped}</div>
           </div>
         </div>
       </div>
 
       {/* Settings */}
-      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:4}}>الإعدادات العامة</div>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:isAr?4:0,paddingLeft:isAr?0:4}}>{isAr ? 'الإعدادات العامة' : 'General Settings'}</div>
       <div className="settings-group">
         <div className="settings-item" onClick={()=>setDark(!dark)}>
           <div className="settings-icon"><i className={`bi ${dark?'bi-moon-fill':'bi-sun-fill'}`}></i></div>
-          <span style={{flex:1,fontWeight:500}}>الوضع الليلي</span>
+          <span style={{flex:1,fontWeight:500}}>{isAr ? 'الوضع الليلي' : 'Dark Mode'}</span>
           <div className={`toggle ${dark?'active':''}`}></div>
         </div>
       </div>
 
-      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:4}}>خيارات أخرى</div>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:isAr?4:0,paddingLeft:isAr?0:4}}>{isAr ? 'خيارات أخرى' : 'Other Options'}</div>
       <div className="settings-group">
         <div className="settings-item" onClick={()=>setEditing(true)}>
           <div className="settings-icon"><i className="bi bi-pencil-fill"></i></div>
-          <span style={{flex:1,fontWeight:500}}>تعديل الملف الشخصي</span>
-          <i className="bi bi-chevron-left" style={{color:'var(--text-muted)'}}></i>
+          <span style={{flex:1,fontWeight:500}}>{isAr ? 'تعديل الملف الشخصي' : 'Edit Profile'}</span>
+          <i className={`bi ${isAr?'bi-chevron-left':'bi-chevron-right'}`} style={{color:'var(--text-muted)'}}></i>
         </div>
         <div className="settings-item" onClick={logoutDonor}>
           <div className="settings-icon" style={{background:'rgba(239,68,68,0.1)'}}><i className="bi bi-box-arrow-right" style={{color:'var(--red)'}}></i></div>
-          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>تسجيل الخروج</span>
+          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>{isAr ? 'تسجيل الخروج' : 'Sign Out'}</span>
         </div>
       </div>
 
@@ -1289,18 +1337,18 @@ function ProfilePage({profile, myTotalAmt, casesHelped, dark, setDark, user, set
         <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)setEditing(false)}}>
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><i className="bi bi-pencil-fill" style={{color:'var(--brand-500)'}}></i>تعديل الملف الشخصي</div>
+              <div className="modal-title"><i className="bi bi-pencil-fill me-1" style={{color:'var(--brand-500)'}}></i>{isAr ? 'تعديل الملف الشخصي' : 'Edit Profile'}</div>
               <button className="modal-close" onClick={()=>setEditing(false)}><i className="bi bi-x-lg"></i></button>
             </div>
             <div className="modal-body">
-              <div className="form-group"><label className="form-label">تغيير الصورة الشخصية</label><input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} style={{padding: '8px 12px'}} /></div>
-              <div className="form-group"><label className="form-label">الاسم الكامل</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
-              <div className="form-group"><label className="form-label">رقم الهاتف</label><input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">{isAr ? 'تغيير الصورة الشخصية' : 'Change Profile Photo'}</label><input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} style={{padding: '8px 12px'}} /></div>
+              <div className="form-group"><label className="form-label">{isAr ? 'الاسم الكامل' : 'Full Name'}</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">{isAr ? 'رقم الهاتف' : 'Phone Number'}</label><input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} /></div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-outline" onClick={()=>setEditing(false)}>إلغاء</button>
+              <button className="btn btn-outline" onClick={()=>setEditing(false)}>{isAr ? 'إلغاء' : 'Cancel'}</button>
               <button className="btn btn-primary" style={{width:'auto'}} onClick={saveProfile} disabled={saving}>
-                {saving ? <><div className="spinner"></div>حفظ...</> : 'حفظ التعديلات'}
+                {saving ? <><div className="spinner"></div>{isAr ? 'حفظ...' : 'Saving...'}</> : (isAr ? 'حفظ التعديلات' : 'Save Changes')}
               </button>
             </div>
           </div>

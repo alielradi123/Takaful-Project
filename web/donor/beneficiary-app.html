@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="تكافل — بوابة المستفيدين | تقديم ومتابعة الطلبات الإنسانية">
   <title>تكافل — بوابة المستفيدين</title>
   <link rel="icon" type="image/webp" href="../app-icon.webp">
@@ -76,6 +76,22 @@ function App() {
   const [profile, setProfile] = useState({name:'...',email:''});
   const [myCases, setMyCases] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const [lang, setLang] = useState(() => localStorage.getItem('takaful-lang') || 'ar');
+  const isAr = lang === 'ar';
+  const toggleLang = () => {
+    const nl = isAr ? 'en' : 'ar';
+    setLang(nl);
+    requestAnimationFrame(() => { const button = document.querySelector('.language-toggle'); if (button) { button.classList.remove('is-changing'); void button.offsetWidth; button.classList.add('is-changing'); } });
+  };
+
+  useEffect(() => {
+    document.documentElement.setAttribute('lang', lang);
+    document.documentElement.setAttribute('dir', lang === 'ar' ? 'rtl' : 'ltr');
+    localStorage.setItem('takaful-lang', lang);
+  }, [lang]);
+
   const [dark, setDark] = useState(() => {
     const mode = localStorage.getItem('takaful-theme-mode');
     if (mode === 'light') return false;
@@ -120,23 +136,29 @@ function App() {
     </div>
   );
 
-  const NAV = [
+  const NAV = isAr ? [
     {id:'home',l:'الرئيسية',icon:'bi-house-fill'},
     {id:'cases',l:'طلباتي',icon:'bi-card-list'},
     {id:'submit',l:'تقديم طلب',icon:'bi-plus-circle-fill'},
     {id:'profile',l:'حسابي',icon:'bi-person-fill'},
+  ] : [
+    {id:'home',l:'Home',icon:'bi-house-fill'},
+    {id:'cases',l:'My Requests',icon:'bi-card-list'},
+    {id:'submit',l:'Submit Request',icon:'bi-plus-circle-fill'},
+    {id:'profile',l:'My Account',icon:'bi-person-fill'},
   ];
 
   return (
     <div className="app-layout">
-      <aside className="sidebar">
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={()=>setSidebarOpen(false)}></div>}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-logo">
             <img src="../app-icon.webp" alt="تكافل" />
           </div>
           <div className="sidebar-brand">
-            <h2>تـكـافـل</h2>
-            <p style={{color:'var(--gold-500)'}}>بوابة المستفيدين</p>
+            <h2>{isAr ? 'تـكـافـل' : 'Takaful'}</h2>
+            <p style={{color:'var(--gold-500)'}}>{isAr ? 'بوابة المستفيدين' : 'Beneficiary Portal'}</p>
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -156,7 +178,7 @@ function App() {
               }
               <div style={{flex:1,minWidth:0}}>
                 <div className="user-name truncate" style={{fontSize:13}}>{profile.name}</div>
-                <div className="user-role truncate" style={{fontSize:11,color:'var(--gold-500)'}}>بوابة المستفيدين</div>
+                <div className="user-role truncate" style={{fontSize:11,color:'var(--gold-500)'}}>{isAr ? 'بوابة المستفيدين' : 'Beneficiary Portal'}</div>
               </div>
             </div>
             <button
@@ -165,7 +187,7 @@ function App() {
               onMouseEnter={e=>{e.currentTarget.style.background='rgba(239,68,68,0.2)'}}
               onMouseLeave={e=>{e.currentTarget.style.background='rgba(239,68,68,0.1)'}}
             >
-              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+              <i className="bi bi-box-arrow-right"></i> {isAr ? 'تسجيل الخروج' : 'Sign Out'}
             </button>
           </div>
         </div>
@@ -173,18 +195,25 @@ function App() {
 
       <div className="main-content">
         <header className="topbar">
+          <button className="mobile-menu-toggle" type="button" aria-label="Open menu" onClick={()=>setSidebarOpen(true)}><i className="bi bi-list"></i></button>
           <div style={{flex:1}}>
-            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || 'تكافل'}</div>
+            <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || (isAr ? 'تكافل' : 'Takaful')}</div>
           </div>
           <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            {/* Language Toggle */}
+            <button onClick={toggleLang} className={`language-toggle ${isAr ? 'is-ar' : 'is-en'}`} title={isAr ? 'Switch to English' : 'التبديل للعربية'}>
+              <span className={`language-toggle-icon ${isAr ? 'flag-uk' : 'flag-sudan'}`} aria-hidden="true">{isAr ? '🇬🇧' : '🇸🇩'}</span>
+              <span className="language-toggle-label">{isAr ? 'EN' : 'Ar'}</span>
+            </button>
             {/* Day/Night pill toggle */}
             <button
-              onClick={()=>setDark(d=>!d)}
-              title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
+              onClick={()=>{setDark(d=>!d); requestAnimationFrame(()=>{const b=document.querySelector('.theme-toggle'); if(b){b.classList.remove('is-changing'); void b.offsetWidth; b.classList.add('is-changing');}})}}
+              className="theme-toggle"
+              title={dark?(isAr?'تفعيل الوضع النهاري':'Switch to Light Mode'):(isAr?'تفعيل الوضع الليلي':'Switch to Dark Mode')}
               style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(30,30,60,0.9)':'rgba(255,200,50,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.2)':'rgba(249,168,37,0.35)',cursor:'pointer',transition:'all 0.35s ease',backdropFilter:'blur(10px)',gap:2,minWidth:70}}
             >
-              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'none':'0 2px 8px rgba(249,168,37,0.5)'}}>☀️</span>
-              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.8)':'transparent',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'0 2px 8px rgba(99,102,241,0.5)':'none'}}>🌙</span>
+              <span className={`theme-toggle-icon ${!dark ? 'is-active' : ''}`} aria-hidden="true"><i className="bi bi-sun-fill" /></span>
+              <span className={`theme-toggle-icon moon ${dark ? 'is-active' : ''}`} aria-hidden="true"><i className="bi bi-moon-stars-fill" /></span>
             </button>
           </div>
         </header>
@@ -192,18 +221,21 @@ function App() {
           {profile.status === 'pending_verification' ? (
             <div className="card" style={{textAlign:'center', padding:'40px 20px', marginTop:'20px'}}>
               <i className="bi bi-shield-lock-fill" style={{fontSize:48, color:'var(--gold-500)', marginBottom:16, display:'block'}}></i>
-              <h3>حسابك قيد المراجعة</h3>
+              <h3>{isAr ? 'حسابك قيد المراجعة' : 'Account Under Review'}</h3>
               <p style={{color:'var(--text-secondary)', marginTop:8}}>
-                لقد استلمنا طلب تسجيلك والمرفقات الخاصة بإثبات الهوية.<br/>
-                سيقوم مدير النظام بمراجعة الطلب والموافقة عليه قريباً. يرجى التحلي بالصبر.
+                {isAr ? (
+                  <>لقد استلمنا طلب تسجيلك والمرفقات الخاصة بإثبات الهوية.<br/>سيقوم مدير النظام بمراجعة الطلب والموافقة عليه قريباً. يرجى التحلي بالصبر.</>
+                ) : (
+                  <>We received your registration request and identity proof.<br/>System admin will review and approve your account soon. Please be patient.</>
+                )}
               </p>
             </div>
           ) : (
             <>
-              {page==='home' && <HomePage cases={myCases} profile={profile} onGoSubmit={()=>setPage('submit')} onGoCases={()=>setPage('cases')} />}
-              {page==='cases' && <MyCasesPage cases={myCases} />}
-              {page==='submit' && <SubmitCasePage user={user} onSuccess={()=>setPage('cases')} />}
-              {page==='profile' && <ProfilePage profile={profile} cases={myCases} dark={dark} setDark={setDark} user={user} setProfile={setProfile} />}
+              {page==='home' && <HomePage cases={myCases} profile={profile} onGoSubmit={()=>setPage('submit')} onGoCases={()=>setPage('cases')} isAr={isAr} />}
+              {page==='cases' && <MyCasesPage cases={myCases} isAr={isAr} />}
+              {page==='submit' && <SubmitCasePage user={user} onSuccess={()=>setPage('cases')} isAr={isAr} />}
+              {page==='profile' && <ProfilePage profile={profile} cases={myCases} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
             </>
           )}
         </main>
@@ -215,13 +247,13 @@ function App() {
 // ═══════════════════════════════════════
 // HOME PAGE
 // ═══════════════════════════════════════
-function HomePage({cases, profile, onGoSubmit, onGoCases}) {
+function HomePage({cases, profile, onGoSubmit, onGoCases, isAr}) {
   const pending = cases.filter(c=>c.status==='pending').length;
   const active = cases.filter(c=>c.status==='active'||c.status==='approved').length;
   const completed = cases.filter(c=>c.status==='completed').length;
   
   const hour = new Date().getHours();
-  const greeting = hour>=5&&hour<12?'صباح الخير':hour>=12&&hour<18?'مساء الخير':'طابت مساؤك';
+  const greeting = hour>=5&&hour<12 ? (isAr?'صباح الخير':'Good morning') : hour>=12&&hour<18 ? (isAr?'مساء الخير':'Good afternoon') : (isAr?'طابت مساؤك':'Good evening');
 
   return (
     <div>
@@ -235,37 +267,37 @@ function HomePage({cases, profile, onGoSubmit, onGoCases}) {
           </div>
           <div>
             <div className="hero-greeting" style={{fontSize:13}}>{greeting}،</div>
-            <div className="hero-name" style={{fontSize:20}}>{(profile.name||'').split(' ').slice(0,2).join(' ')||'مستفيد'}</div>
+            <div className="hero-name" style={{fontSize:20}}>{(profile.name||'').split(' ').slice(0,2).join(' ')||(isAr?'مستفيد':'Beneficiary')}</div>
           </div>
         </div>
         <div className="hero-stats">
           <div className="hero-stat" onClick={onGoCases} style={{cursor:'pointer'}}>
-            <div className="hero-stat-label"><i className="bi bi-folder2-open"></i> طلبات نشطة</div>
-            <div className="hero-stat-value">{active} طلب</div>
+            <div className="hero-stat-label"><i className="bi bi-folder2-open"></i> {isAr?'طلبات نشطة':'Active Requests'}</div>
+            <div className="hero-stat-value">{active} {isAr?'طلب':'req'}</div>
           </div>
           <div className="hero-stat">
-            <div className="hero-stat-label"><i className="bi bi-clock-history"></i> قيد المراجعة</div>
-            <div className="hero-stat-value">{pending} طلب</div>
+            <div className="hero-stat-label"><i className="bi bi-clock-history"></i> {isAr?'قيد المراجعة':'Under Review'}</div>
+            <div className="hero-stat-value">{pending} {isAr?'طلب':'req'}</div>
           </div>
         </div>
       </div>
 
       <div style={{display:'flex',gap:16,marginBottom:24,flexWrap:'wrap'}}>
         <button className="btn btn-primary" onClick={onGoSubmit} style={{flex:1,minWidth:200,height:56,fontSize:16}}>
-          <i className="bi bi-plus-circle-fill"></i> تقديم طلب مساعدة جديد
+          <i className="bi bi-plus-circle-fill"></i> {isAr?'تقديم طلب مساعدة جديد':'Submit New Request'}
         </button>
       </div>
 
       <div className="section-header">
-        <div className="section-title"><div className="section-bar"></div>أحدث طلباتي</div>
-        <div className="section-action" onClick={onGoCases}>عرض الكل <i className="bi bi-chevron-left"></i></div>
+        <div className="section-title"><div className="section-bar"></div>{isAr?'أحدث طلباتي':'My Recent Requests'}</div>
+        <div className="section-action" onClick={onGoCases}>{isAr?'عرض الكل ':'View All '}<i className={`bi ${isAr?'bi-chevron-left':'bi-chevron-right'}`}></i></div>
       </div>
 
       {cases.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-folder"></i><h3>لا توجد طلبات سابقة</h3><p>يمكنك رفع طلب مساعدة جديد ليتم مراجعته</p></div></div>
+        <div className="card"><div className="empty-state"><i className="bi bi-folder"></i><h3>{isAr?'لا توجد طلبات سابقة':'No Previous Requests'}</h3><p>{isAr?'يمكنك رفع طلب مساعدة جديد ليتم مراجعته':'You can submit a new aid request for review'}</p></div></div>
       ) : (
         <div className="cases-grid">
-          {cases.slice(0,2).map(c=><CaseCard key={c.id} c={c} />)}
+          {cases.slice(0,2).map(c=><CaseCard key={c.id} c={c} isAr={isAr} />)}
         </div>
       )}
     </div>
@@ -275,7 +307,7 @@ function HomePage({cases, profile, onGoSubmit, onGoCases}) {
 // ═══════════════════════════════════════
 // CASE CARD
 // ═══════════════════════════════════════
-function CaseCard({c}) {
+function CaseCard({c, isAr}) {
   const target = c.targetAmount||c.amountRequired||0;
   const raised = c.raisedAmount||c.amountRaised||0;
   const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
@@ -283,11 +315,11 @@ function CaseCard({c}) {
 
   const getStatus = (status) => {
     switch(status) {
-      case 'pending': return <span className="badge badge-medium">قيد المراجعة</span>;
+      case 'pending': return <span className="badge badge-medium">{isAr?'قيد المراجعة':'Under Review'}</span>;
       case 'approved': 
-      case 'active': return <span className="badge badge-urgent" style={{background:'rgba(16,185,129,0.1)',color:'var(--brand-500)'}}>نشط ويتم الجمع</span>;
-      case 'rejected': return <span className="badge badge-urgent">مرفوض</span>;
-      case 'completed': return <span className="badge badge-status-distributed">مكتمل</span>;
+      case 'active': return <span className="badge badge-urgent" style={{background:'rgba(16,185,129,0.1)',color:'var(--brand-500)'}}>{isAr?'نشط ويتم الجمع':'Active & Collecting'}</span>;
+      case 'rejected': return <span className="badge badge-urgent">{isAr?'مرفوض':'Rejected'}</span>;
+      case 'completed': return <span className="badge badge-status-distributed">{isAr?'مكتمل':'Completed'}</span>;
       default: return <span className="badge badge-cat">{status}</span>;
     }
   };
@@ -304,17 +336,17 @@ function CaseCard({c}) {
         </div>
       </div>
       <div className="case-card-body">
-        <div className="case-card-title">{c.title||'بدون عنوان'}</div>
+        <div className="case-card-title">{c.title||(isAr?'بدون عنوان':'Untitled')}</div>
         <div className="case-card-desc" style={{marginBottom:12}}>{getStatus(c.status)}</div>
         
         {c.category==='مالي' && target > 0 && (
           <div className="case-card-progress">
             <div className="case-card-progress-labels">
-              <span className="text-brand bold">تم جمع: {fmtNum(raised)} ج.س</span>
+              <span className="text-brand bold">{isAr?'تم جمع:':'Raised:'} {fmtNum(raised)} {isAr?'ج.س':'SDG'}</span>
               <span className="text-muted">{pct}%</span>
             </div>
             <div className="progress-bar"><div className="progress-fill animated" style={{width:`${pct}%`}}></div></div>
-            <div className="text-xs text-muted" style={{marginTop:4}}>المطلوب: {fmtNum(target)} ج.س</div>
+            <div className="text-xs text-muted" style={{marginTop:4}}>{isAr?'المطلوب:':'Target:'} {fmtNum(target)} {isAr?'ج.س':'SDG'}</div>
           </div>
         )}
       </div>
@@ -325,17 +357,17 @@ function CaseCard({c}) {
 // ═══════════════════════════════════════
 // MY CASES PAGE
 // ═══════════════════════════════════════
-function MyCasesPage({cases}) {
+function MyCasesPage({cases, isAr}) {
   return (
     <div>
       <div className="section-header" style={{marginBottom:20}}>
-        <div className="section-title"><div className="section-bar"></div>سجل طلباتي</div>
+        <div className="section-title"><div className="section-bar"></div>{isAr?'سجل طلباتي':'My Requests History'}</div>
       </div>
       {cases.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-folder-x"></i><h3>لا توجد طلبات سابقة</h3></div></div>
+        <div className="card"><div className="empty-state"><i className="bi bi-folder-x"></i><h3>{isAr?'لا توجد طلبات سابقة':'No Previous Requests'}</h3></div></div>
       ) : (
         <div className="cases-grid">
-          {cases.map(c=><CaseCard key={c.id} c={c} />)}
+          {cases.map(c=><CaseCard key={c.id} c={c} isAr={isAr} />)}
         </div>
       )}
     </div>
@@ -345,7 +377,7 @@ function MyCasesPage({cases}) {
 // ═══════════════════════════════════════
 // SUBMIT CASE PAGE
 // ═══════════════════════════════════════
-function SubmitCasePage({user, onSuccess}) {
+function SubmitCasePage({user, onSuccess, isAr}) {
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({
     title: '', category: 'مالي', targetAmount: '', location: '', urgencyLevel: 'عادي', description: ''
@@ -354,8 +386,8 @@ function SubmitCasePage({user, onSuccess}) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if(!data.title || !data.description || !data.location) { showToast('error','يرجى إكمال الحقول المطلوبة'); return; }
-    if(data.category === 'مالي' && (!data.targetAmount || isNaN(data.targetAmount))) { showToast('error','يرجى إدخال مبلغ صحيح'); return; }
+    if(!data.title || !data.description || !data.location) { showToast('error', isAr?'يرجى إكمال الحقول المطلوبة':'Please complete all required fields'); return; }
+    if(data.category === 'مالي' && (!data.targetAmount || isNaN(data.targetAmount))) { showToast('error', isAr?'يرجى إدخال مبلغ صحيح':'Please enter a valid amount'); return; }
     
     setSaving(true);
     try {
@@ -393,10 +425,10 @@ function SubmitCasePage({user, onSuccess}) {
       // We don't strictly need this, but the Android app does it.
       await updateDoc(docRef, { id: docRef.id });
       
-      showToast('success','تم رفع طلبك بنجاح، وهو قيد المراجعة الآن.');
+      showToast('success', isAr?'تم رفع طلبك بنجاح، وهو قيد المراجعة الآن.':'Request submitted! It is now under review.');
       onSuccess();
     } catch(err) {
-      showToast('error', 'خطأ: ' + err.message);
+      showToast('error', (isAr?'خطأ: ':'Error: ') + err.message);
     } finally {
       setSaving(false);
     }
@@ -404,56 +436,56 @@ function SubmitCasePage({user, onSuccess}) {
 
   return (
     <div className="card" style={{padding:24, maxWidth:600, margin:'0 auto'}}>
-      <h2 style={{fontSize:20,fontWeight:800,marginBottom:20}}><i className="bi bi-file-earmark-plus-fill text-brand"></i> رفع طلب مساعدة جديد</h2>
+      <h2 style={{fontSize:20,fontWeight:800,marginBottom:20}}><i className="bi bi-file-earmark-plus-fill text-brand"></i> {isAr?'رفع طلب مساعدة جديد':'Submit New Aid Request'}</h2>
       <form onSubmit={handleSubmit}>
         <div className="form-group">
-          <label className="form-label">عنوان الطلب *</label>
-          <input className="form-input" required value={data.title} onChange={e=>setData({...data,title:e.target.value})} placeholder="مثال: مساعدة في رسوم علاجية" />
+          <label className="form-label">{isAr?'عنوان الطلب *':'Request Title *'}</label>
+          <input className="form-input" required value={data.title} onChange={e=>setData({...data,title:e.target.value})} placeholder={isAr?'مثال: مساعدة في رسوم علاجية':'e.g. Help with medical fees'} />
         </div>
         
         <div style={{display:'flex',gap:16,marginBottom:16}}>
           <div className="form-group" style={{flex:1,marginBottom:0}}>
-            <label className="form-label">تصنيف الحالة</label>
+            <label className="form-label">{isAr?'تصنيف الحالة':'Case Category'}</label>
             <select className="form-input" value={data.category} onChange={e=>setData({...data,category:e.target.value})}>
-              <option value="مالي">مالي</option>
-              <option value="طبي">طبي</option>
-              <option value="عيني">عيني</option>
+              <option value="مالي">{isAr?'مالي':'Financial'}</option>
+              <option value="طبي">{isAr?'طبي':'Medical'}</option>
+              <option value="عيني">{isAr?'عيني':'In-Kind'}</option>
             </select>
           </div>
           <div className="form-group" style={{flex:1,marginBottom:0}}>
-            <label className="form-label">مستوى الأهمية</label>
+            <label className="form-label">{isAr?'مستوى الأهمية':'Priority Level'}</label>
             <select className="form-input" value={data.urgencyLevel} onChange={e=>setData({...data,urgencyLevel:e.target.value})}>
-              <option value="عادي">عادي</option>
-              <option value="متوسط">متوسط</option>
-              <option value="عاجل">عاجل</option>
+              <option value="عادي">{isAr?'عادي':'Normal'}</option>
+              <option value="متوسط">{isAr?'متوسط':'Medium'}</option>
+              <option value="عاجل">{isAr?'عاجل':'Urgent'}</option>
             </select>
           </div>
         </div>
 
         {data.category === 'مالي' && (
           <div className="form-group">
-            <label className="form-label">المبلغ المطلوب (ج.س) *</label>
-            <input type="number" className="form-input" required value={data.targetAmount} onChange={e=>setData({...data,targetAmount:e.target.value})} placeholder="مثال: 50000" />
+            <label className="form-label">{isAr?'المبلغ المطلوب (ج.س) *':'Required Amount (SDG) *'}</label>
+            <input type="number" className="form-input" required value={data.targetAmount} onChange={e=>setData({...data,targetAmount:e.target.value})} placeholder={isAr?'مثال: 50000':'e.g. 50000'} />
           </div>
         )}
 
         <div className="form-group">
-          <label className="form-label">الموقع / السكن *</label>
-          <input className="form-input" required value={data.location} onChange={e=>setData({...data,location:e.target.value})} placeholder="مثال: الخرطوم، جبرة" />
+          <label className="form-label">{isAr?'الموقع / السكن *':'Location / Residence *'}</label>
+          <input className="form-input" required value={data.location} onChange={e=>setData({...data,location:e.target.value})} placeholder={isAr?'مثال: الخرطوم، جبرة':'e.g. Khartoum, Jabra'} />
         </div>
 
         <div className="form-group">
-          <label className="form-label">وصف الحالة (القصة) *</label>
-          <textarea className="form-input" required rows="4" value={data.description} onChange={e=>setData({...data,description:e.target.value})} placeholder="اشرح حالة الاحتياج بالتفصيل..."></textarea>
+          <label className="form-label">{isAr?'وصف الحالة (القصة) *':'Case Description (Story) *'}</label>
+          <textarea className="form-input" required rows="4" value={data.description} onChange={e=>setData({...data,description:e.target.value})} placeholder={isAr?'اشرح حالة الاحتياج بالتفصيل...':'Describe the need in detail...'}></textarea>
         </div>
 
         <div className="form-group">
-          <label className="form-label">مستند إثبات / صورة للحالة (اختياري)</label>
+          <label className="form-label">{isAr?'مستند إثبات / صورة للحالة (اختياري)':'Proof Document / Photo (Optional)'}</label>
           <input type="file" className="form-input" accept="image/*" onChange={e=>setFile(e.target.files[0])} />
         </div>
 
         <button type="submit" className="btn btn-primary" style={{width:'100%'}} disabled={saving}>
-          {saving ? <div className="spinner"></div> : 'إرسال الطلب للمراجعة'}
+          {saving ? <div className="spinner"></div> : (isAr?'إرسال الطلب للمراجعة':'Submit Request for Review')}
         </button>
       </form>
     </div>
@@ -463,7 +495,7 @@ function SubmitCasePage({user, onSuccess}) {
 // ═══════════════════════════════════════
 // PROFILE PAGE
 // ═══════════════════════════════════════
-function ProfilePage({profile, cases, dark, setDark, user, setProfile}) {
+function ProfilePage({profile, cases, dark, setDark, user, setProfile, isAr}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.name);
   const [phone, setPhone] = useState(profile.phone || '');
@@ -485,8 +517,8 @@ function ProfilePage({profile, cases, dark, setDark, user, setProfile}) {
       await updateDoc(doc(db,'users',user.uid),{ name: name.trim(), phone: phone.trim(), photoURL, updatedAt: serverTimestamp() });
       setProfile(p=>({...p, name: name.trim(), phone: phone.trim(), photoURL}));
       setEditing(false);
-      showToast('success','تم حفظ التعديلات بنجاح');
-    } catch(e) { showToast('error','خطأ: '+e.message); }
+      showToast('success', isAr?'تم حفظ التعديلات بنجاح':'Profile saved successfully');
+    } catch(e) { showToast('error', (isAr?'خطأ: ':'Error: ')+e.message); }
     finally { setSaving(false); setPhotoFile(null); }
   };
 
@@ -502,7 +534,7 @@ function ProfilePage({profile, cases, dark, setDark, user, setProfile}) {
             {profile.photoURL ? <img src={profile.photoURL} alt="Profile" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} /> : ini(profile.name)}
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name||'مستفيد'}</div>
+            <div style={{fontSize:20,fontWeight:900,color:'#fff'}}>{profile.name||(isAr?'مستفيد':'Beneficiary')}</div>
             <div style={{fontSize:13,color:'rgba(255,255,255,0.7)',marginTop:2}}>{profile.email}</div>
             {profile.phone && <div style={{fontSize:13,color:'rgba(255,255,255,0.7)'}}>{profile.phone}</div>}
           </div>
@@ -512,36 +544,36 @@ function ProfilePage({profile, cases, dark, setDark, user, setProfile}) {
         </div>
         <div className="profile-stats">
           <div className="profile-stat">
-            <div className="profile-stat-label"><i className="bi bi-folder2-open"></i> طلبات قيد المراجعة أو نشطة</div>
+            <div className="profile-stat-label"><i className="bi bi-folder2-open"></i> {isAr?'طلبات قيد المراجعة أو نشطة':'Active or Under Review'}</div>
             <div className="profile-stat-value">{activeCases}</div>
           </div>
           <div className="profile-stat">
-            <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> طلبات مكتملة</div>
+            <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> {isAr?'طلبات مكتملة':'Completed Requests'}</div>
             <div className="profile-stat-value">{completedCases}</div>
           </div>
         </div>
       </div>
 
       {/* Settings */}
-      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:4}}>الإعدادات العامة</div>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,paddingRight:4}}>{isAr?'الإعدادات العامة':'General Settings'}</div>
       <div className="settings-group">
         <div className="settings-item" onClick={()=>setDark(!dark)}>
           <div className="settings-icon"><i className={`bi ${dark?'bi-moon-fill':'bi-sun-fill'}`}></i></div>
-          <span style={{flex:1,fontWeight:500}}>الوضع الليلي</span>
+          <span style={{flex:1,fontWeight:500}}>{isAr?'الوضع الليلي':'Dark Mode'}</span>
           <div className={`toggle ${dark?'active':''}`}></div>
         </div>
       </div>
 
-      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:4}}>خيارات أخرى</div>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:12,marginTop:24,paddingRight:4}}>{isAr?'خيارات أخرى':'Other Options'}</div>
       <div className="settings-group">
         <div className="settings-item" onClick={()=>setEditing(true)}>
           <div className="settings-icon"><i className="bi bi-pencil-fill"></i></div>
-          <span style={{flex:1,fontWeight:500}}>تعديل الملف الشخصي</span>
-          <i className="bi bi-chevron-left" style={{color:'var(--text-muted)'}}></i>
+          <span style={{flex:1,fontWeight:500}}>{isAr?'تعديل الملف الشخصي':'Edit Profile'}</span>
+          <i className={`bi ${isAr?'bi-chevron-left':'bi-chevron-right'}`} style={{color:'var(--text-muted)'}}></i>
         </div>
         <div className="settings-item" onClick={logoutDonor}>
           <div className="settings-icon" style={{background:'rgba(239,68,68,0.1)'}}><i className="bi bi-box-arrow-right" style={{color:'var(--red)'}}></i></div>
-          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>تسجيل الخروج</span>
+          <span style={{flex:1,fontWeight:500,color:'var(--red)'}}>{isAr?'تسجيل الخروج':'Sign Out'}</span>
         </div>
       </div>
 
@@ -550,18 +582,18 @@ function ProfilePage({profile, cases, dark, setDark, user, setProfile}) {
         <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget)setEditing(false)}}>
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><i className="bi bi-pencil-fill" style={{color:'var(--brand-500)'}}></i>تعديل الملف الشخصي</div>
+              <div className="modal-title"><i className="bi bi-pencil-fill" style={{color:'var(--brand-500)'}}></i>{isAr?'تعديل الملف الشخصي':'Edit Profile'}</div>
               <button className="modal-close" onClick={()=>setEditing(false)}><i className="bi bi-x-lg"></i></button>
             </div>
             <div className="modal-body">
-              <div className="form-group"><label className="form-label">تغيير الصورة الشخصية</label><input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} style={{padding: '8px 12px'}} /></div>
-              <div className="form-group"><label className="form-label">الاسم الكامل</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
-              <div className="form-group"><label className="form-label">رقم الهاتف</label><input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">{isAr?'تغيير الصورة الشخصية':'Change Profile Photo'}</label><input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} style={{padding: '8px 12px'}} /></div>
+              <div className="form-group"><label className="form-label">{isAr?'الاسم الكامل':'Full Name'}</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">{isAr?'رقم الهاتف':'Phone Number'}</label><input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} /></div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-outline" onClick={()=>setEditing(false)}>إلغاء</button>
+              <button className="btn btn-outline" onClick={()=>setEditing(false)}>{isAr?'إلغاء':'Cancel'}</button>
               <button className="btn btn-primary" style={{width:'auto'}} onClick={saveProfile} disabled={saving}>
-                {saving ? <><div className="spinner"></div>حفظ...</> : 'حفظ التعديلات'}
+                {saving ? <><div className="spinner"></div>{isAr?'حفظ...':'Saving...'}</> : (isAr?'حفظ التعديلات':'Save Changes')}
               </button>
             </div>
           </div>

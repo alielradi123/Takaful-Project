@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>تكافل - استعادة الحساب</title>
   <link rel="icon" type="image/webp" href="../app-icon.webp">
   
@@ -26,9 +26,9 @@
 <body class="auth-page">
 
   <!-- Theme Toggle -->
-  <button id="theme-toggle" class="theme-toggle-btn" aria-label="تبديل الوضع" style="display:flex;align-items:center;padding:5px 6px;border-radius:50px;cursor:pointer;transition:all 0.35s ease;gap:2;min-width:70px;position:absolute;top:20px;left:20px;z-index:10;backdrop-filter:blur(10px)">
-    <span id="theme-icon-sun" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.35s ease;font-size:14px;">☀️</span>
-    <span id="theme-icon-moon" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.35s ease;font-size:14px;">🌙</span>
+  <button id="theme-toggle" class="theme-toggle" aria-label="تبديل الوضع" style="position:absolute;top:20px;left:20px;z-index:10;">
+    <span id="theme-icon-sun" class="theme-toggle-icon" aria-hidden="true"><i class="bi bi-sun-fill"></i></span>
+    <span id="theme-icon-moon" class="theme-toggle-icon moon" aria-hidden="true"><i class="bi bi-moon-stars-fill"></i></span>
   </button>
 
   <div class="auth-card">
@@ -105,12 +105,17 @@
       document.getElementById('theme-icon-sun').style.color = isLight ? '#fff' : 'rgba(255,200,50,0.4)';
       document.getElementById('theme-icon-moon').style.background = isLight ? 'transparent' : 'rgba(99,102,241,0.8)';
       document.getElementById('theme-icon-moon').style.color = isLight ? 'rgba(99,102,241,0.3)' : '#fff';
+      document.getElementById('theme-icon-sun').classList.toggle('is-active', isLight);
+      document.getElementById('theme-icon-moon').classList.toggle('is-active', !isLight);
     }
     updateThemeIcon();
     themeToggleBtn.addEventListener('click', () => {
       const isLight = document.documentElement.getAttribute('data-theme') === 'light';
       document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
       localStorage.setItem('takaful-theme-mode', isLight ? 'dark' : 'light');
+      themeToggleBtn.classList.remove('is-changing');
+      void themeToggleBtn.offsetWidth;
+      themeToggleBtn.classList.add('is-changing');
       updateThemeIcon();
     });
 

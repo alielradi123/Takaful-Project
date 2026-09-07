@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="تكافل — بوابة المستخدمين | تسجيل الدخول أو إنشاء حساب جديد">
   <title>تكافل — بوابة المستخدمين</title>
   <link rel="icon" type="image/webp" href="../app-icon.webp">
@@ -97,11 +97,15 @@
 </head>
 <body>
   <div class="auth-page">
-    <button id="theme-toggle" aria-label="تبديل الوضع" style="display:flex;align-items:center;padding:5px 6px;border-radius:50px;background:rgba(255,200,50,0.15);border:1px solid rgba(249,168,37,0.35);cursor:pointer;transition:all 0.35s ease;gap:2;min-width:70px;position:absolute;top:20px;left:20px;z-index:10;backdrop-filter:blur(10px)">
-      <span id="theme-icon-sun" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#F9A825;transition:all 0.35s ease;font-size:14px;box-shadow:0 2px 8px rgba(249,168,37,0.5)">☀️</span>
-      <span id="theme-icon-moon" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:transparent;transition:all 0.35s ease;font-size:14px;box-shadow:none">🌙</span>
+    <button id="theme-toggle" class="theme-toggle" aria-label="تبديل الوضع" style="position:absolute;top:20px;left:20px;z-index:10;">
+      <span id="theme-icon-sun" class="theme-toggle-icon" aria-hidden="true"><i class="bi bi-sun-fill"></i></span>
+      <span id="theme-icon-moon" class="theme-toggle-icon moon" aria-hidden="true"><i class="bi bi-moon-stars-fill"></i></span>
     </button>
 
+    <button id="lang-toggle" class="language-toggle is-ar" aria-label="تبديل اللغة" onclick="toggleLang()" style="position:absolute;top:20px;left:100px;z-index:10;">
+      <span id="lang-toggle-icon" class="language-toggle-icon flag-uk" aria-hidden="true">🇬🇧</span>
+      <span id="lang-toggle-label" class="language-toggle-label">EN</span>
+    </button>
     <div class="auth-bg-circles">
       <span></span><span></span><span></span>
     </div>
@@ -113,14 +117,14 @@
           <div class="auth-logo-icon" style="background:#FFFFFF; border:none;">
             <img src="../app-icon.webp" alt="Takaful Logo" style="filter: drop-shadow(0px 4px 12px rgba(232, 80, 10, 0.4));">
           </div>
-          <h1 style="font-size: 24px;">تـكـافـل</h1>
-          <p style="font-size: 13px;">نبض العطاء وإشراقة الأمل</p>
+          <h1 id="txt-appname" style="font-size: 24px;">تـكـافـل</h1>
+          <p id="txt-slogan" style="font-size: 13px;">نبض العطاء وإشراقة الأمل</p>
         </div>
 
         <!-- Tabs -->
         <div class="auth-tabs" id="auth-tabs">
-          <div class="auth-tab active" data-tab="login">تسجيل الدخول</div>
-          <div class="auth-tab" data-tab="register">حساب جديد</div>
+          <div class="auth-tab active" id="tab-login" data-tab="login">تسجيل الدخول</div>
+          <div class="auth-tab" id="tab-register" data-tab="register">حساب جديد</div>
         </div>
 
       <!-- Error -->
@@ -132,29 +136,29 @@
       <!-- ═══ LOGIN FORM ═══ -->
       <form id="login-form">
         <div class="form-group">
-          <label class="form-label" for="login-email">البريد الإلكتروني</label>
+          <label class="form-label" id="lbl-email" for="login-email">البريد الإلكتروني</label>
           <div class="input-group">
             <span class="input-icon"><i class="bi bi-envelope-fill"></i></span>
             <input id="login-email" type="email" class="form-input" placeholder="email@example.com" autocomplete="email" required>
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="login-password">كلمة المرور</label>
+          <label class="form-label" id="lbl-password" for="login-password">كلمة المرور</label>
           <div class="input-group">
-            <span class="input-icon" style="right: 14px;"><i class="bi bi-lock-fill"></i></span>
-            <input id="login-password" type="password" class="form-input" placeholder="••••••••" autocomplete="current-password" style="padding-left: 40px;" required>
-            <span class="password-toggle" onclick="togglePassword('login-password', this)" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); cursor: pointer; z-index: 10;"><i class="bi bi-eye"></i></span>
+            <span class="input-icon password-field-icon"><i class="bi bi-lock-fill"></i></span>
+            <input id="login-password" type="password" class="form-input password-input" placeholder="••••••••" autocomplete="current-password" required>
+            <span class="password-toggle" onclick="togglePassword('login-password', this)"><i class="bi bi-eye"></i></span>
           </div>
         </div>
         <div class="form-group" style="display:flex; justify-content:space-between; align-items:center; margin-top:-10px; margin-bottom:18px;">
-          <a href="recovery.html" style="color:var(--brand-500); font-size:13px; font-weight:600; text-decoration:none;">نسيت كلمة المرور؟</a>
+          <a href="recovery.html" id="lbl-forgot" style="color:var(--brand-500); font-size:13px; font-weight:600; text-decoration:none;">نسيت كلمة المرور؟</a>
         </div>
         <button type="submit" class="btn btn-primary" id="login-btn" style="border-radius:50px;">
           <span id="login-btn-text">تسجيل الدخول</span>
         </button>
-        <div class="auth-divider">أو</div>
+        <div class="auth-divider" id="txt-or">أو</div>
         <button type="button" class="btn btn-google" id="google-login-btn" style="border-radius:50px;">
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:20px; height:20px; margin-left:8px;"> المتابعة باستخدام جوجل
+          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:20px; height:20px; margin-left:8px;"> <span id="txt-google">المتابعة باستخدام جوجل</span>
         </button>
       </form>
 
@@ -165,11 +169,11 @@
         <div id="step-progress" class="step-progress" style="display:none; margin: 10px 0 24px 0;">
           <div class="step-item active" id="sp-1">
             <div class="step-circle">1</div>
-            <div class="step-label">البيانات الأساسية</div>
+            <div class="step-label" id="sp-1-label">البيانات الأساسية</div>
           </div>
           <div class="step-item" id="sp-2">
             <div class="step-circle">2</div>
-            <div class="step-label">إثبات الهوية</div>
+            <div class="step-label" id="sp-2-label">إثبات الهوية</div>
           </div>
         </div>
 
@@ -177,22 +181,22 @@
         <div class="form-step active" id="step-1">
           <!-- Role Selector -->
           <div class="form-group" style="margin-bottom:20px;">
-            <label class="form-label">نوع الحساب</label>
-            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
+            <label class="form-label" id="role-type-label">نوع الحساب</label>
+            <div class="role-grid">
               <label class="payment-option selected" id="role-donor-lbl" style="cursor:pointer;padding:12px 8px;text-align:center;">
                 <input type="radio" name="reg-role" value="donor" checked style="display:none;">
                 <i class="bi bi-heart-fill" style="color:var(--brand-500);font-size:18px;display:block;margin-bottom:4px;"></i>
-                <span style="font-size:12px;font-weight:700;">متبرع</span>
+                <span id="role-donor-text" style="font-size:12px;font-weight:700;">متبرع</span>
               </label>
               <label class="payment-option" id="role-beneficiary-lbl" style="cursor:pointer;padding:12px 8px;text-align:center;">
                 <input type="radio" name="reg-role" value="beneficiary" style="display:none;">
                 <i class="bi bi-person-hearts" style="color:var(--gold-500);font-size:18px;display:block;margin-bottom:4px;"></i>
-                <span style="font-size:12px;font-weight:700;">مستفيد</span>
+                <span id="role-beneficiary-text" style="font-size:12px;font-weight:700;">مستفيد</span>
               </label>
               <label class="payment-option" id="role-volunteer-lbl" style="cursor:pointer;padding:12px 8px;text-align:center;">
                 <input type="radio" name="reg-role" value="volunteer" style="display:none;">
                 <i class="bi bi-people-fill" style="color:#60a5fa;font-size:18px;display:block;margin-bottom:4px;"></i>
-                <span style="font-size:12px;font-weight:700;">متطوع</span>
+                <span id="role-volunteer-text" style="font-size:12px;font-weight:700;">متطوع</span>
               </label>
             </div>
           </div>
@@ -200,40 +204,50 @@
           <!-- Basic Fields Grid -->
           <div class="form-grid">
             <div class="form-group">
-              <label class="form-label" for="reg-name">الاسم الكامل *</label>
+              <label class="form-label" id="lbl-reg-name" for="reg-name">الاسم الكامل *</label>
               <div class="input-group">
                 <span class="input-icon"><i class="bi bi-person-fill"></i></span>
                 <input id="reg-name" type="text" class="form-input" placeholder="محمد أحمد" autocomplete="name" required>
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label" for="reg-email">البريد الإلكتروني *</label>
+              <label class="form-label" id="lbl-reg-email" for="reg-email">البريد الإلكتروني *</label>
               <div class="input-group">
                 <span class="input-icon"><i class="bi bi-envelope-fill"></i></span>
                 <input id="reg-email" type="email" class="form-input" placeholder="email@example.com" autocomplete="email" required>
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label" for="reg-phone">رقم الهاتف</label>
+              <label class="form-label" id="lbl-reg-phone" for="reg-phone">رقم الهاتف</label>
               <div class="input-group">
                 <span class="input-icon"><i class="bi bi-telephone-fill"></i></span>
                 <input id="reg-phone" type="tel" class="form-input" placeholder="0912345678" autocomplete="tel">
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label" for="reg-password">كلمة المرور *</label>
+              <label class="form-label" id="lbl-reg-password" for="reg-password">كلمة المرور *</label>
               <div class="input-group">
-              <span class="input-icon" style="right: 14px;"><i class="bi bi-lock-fill"></i></span>
-              <input id="reg-password" type="password" class="form-input" placeholder="••••••••" style="padding-left: 40px;" autocomplete="new-password" required minlength="6">
-              <span class="password-toggle" onclick="togglePassword('reg-password', this)" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); cursor: pointer; z-index: 10;"><i class="bi bi-eye"></i></span>
+              <span class="input-icon password-field-icon"><i class="bi bi-lock-fill"></i></span>
+              <input id="reg-password" type="password" class="form-input password-input" placeholder="••••••••" autocomplete="new-password" required minlength="8">
+              <span class="password-toggle" onclick="togglePassword('reg-password', this)"><i class="bi bi-eye"></i></span>
+            </div>
+            <div id="password-strength" class="password-strength" aria-live="polite">
+              <div class="password-strength-bar"><div id="password-strength-fill" class="password-strength-fill"></div></div>
+              <div class="password-strength-meta"><span id="password-strength-label" class="password-strength-label"></span><span id="password-strength-count"></span></div>
+              <div class="password-rules">
+                <span class="password-rule" id="rule-length"><i class="bi bi-circle"></i><span id="rule-length-text">8 أحرف على الأقل</span></span>
+                <span class="password-rule" id="rule-upper"><i class="bi bi-circle"></i><span id="rule-upper-text">حرف كبير (A-Z)</span></span>
+                <span class="password-rule" id="rule-number"><i class="bi bi-circle"></i><span id="rule-number-text">رقم (0-9)</span></span>
+                <span class="password-rule" id="rule-special"><i class="bi bi-circle"></i><span id="rule-special-text">رمز خاص (!@#)</span></span>
+              </div>
             </div>
             </div>
             <div class="form-group full-width">
-              <label class="form-label" for="reg-photo">الصورة الشخصية (اختياري)</label>
+              <label class="form-label" id="lbl-reg-photo" for="reg-photo">الصورة الشخصية (اختياري)</label>
               <div class="upload-zone" style="padding:15px;">
                 <input type="file" id="reg-photo" accept="image/*" onchange="previewPhoto(this,'photo-preview')">
                 <i class="bi bi-camera-fill" style="font-size:24px; margin-bottom:4px;"></i>
-                <div class="upload-label">انقر لرفع صورة شخصية</div>
+                <div class="upload-label" id="photo-upload-label">انقر لرفع صورة شخصية</div>
               </div>
               <img id="photo-preview" class="upload-preview" alt="معاينة">
             </div>
@@ -246,7 +260,7 @@
 
           <div class="auth-divider">أو</div>
           <button type="button" class="btn btn-google" id="google-register-btn" style="border-radius:50px;">
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:20px; height:20px; margin-left:8px;"> المتابعة باستخدام جوجل
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width:20px; height:20px; margin-left:8px;"> <span id="google-register-text">المتابعة باستخدام جوجل</span>
           </button>
         </div>
 
@@ -255,26 +269,26 @@
           <div class="pending-banner" style="margin-bottom:20px;">
             <i class="bi bi-shield-check"></i>
             <div>
-              <p><strong>التحقق من الهوية مطلوب</strong></p>
-              <p>لحماية مجتمع تكافل، يرجى رفع وثيقة هوية سارية. سيتم مراجعة طلبك خلال 24 ساعة.</p>
+              <p><strong id="identity-required">التحقق من الهوية مطلوب</strong></p>
+              <p id="identity-notice">لحماية مجتمع تكافل، يرجى رفع وثيقة هوية سارية. سيتم مراجعة طلبك خلال 24 ساعة.</p>
             </div>
           </div>
 
           <!-- Doc type -->
           <div class="form-group">
-            <label class="form-label">نوع وثيقة الهوية *</label>
+            <label class="form-label" id="identity-type-label">نوع وثيقة الهوية *</label>
             <div class="doc-type-grid" style="grid-template-columns: 1fr 1fr 1fr;">
               <div class="doc-type-card selected" data-doc="national_number" onclick="selectDocType(this)">
                 <i class="bi bi-file-person-fill"></i>
-                <span>رقم وطني</span>
+                <span id="doc-national-number">رقم وطني</span>
               </div>
               <div class="doc-type-card" data-doc="national_id" onclick="selectDocType(this)">
                 <i class="bi bi-credit-card-2-front-fill"></i>
-                <span>بطاقة قومية</span>
+                <span id="doc-national-id">بطاقة قومية</span>
               </div>
               <div class="doc-type-card" data-doc="passport" onclick="selectDocType(this)">
                 <i class="bi bi-passport-fill"></i>
-                <span>جواز سفر</span>
+                <span id="doc-passport">جواز سفر</span>
               </div>
             </div>
             <input type="hidden" id="doc-type" value="national_number">
@@ -283,14 +297,14 @@
           <!-- Doc number + country -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
-              <label class="form-label" for="doc-number">رقم الوثيقة *</label>
+              <label class="form-label" id="doc-number-label" for="doc-number">رقم الوثيقة *</label>
               <div class="input-group">
                 <span class="input-icon"><i class="bi bi-123"></i></span>
                 <input id="doc-number" type="text" class="form-input" placeholder="12345678">
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label" for="doc-country">البلد / المحافظة</label>
+              <label class="form-label" id="doc-country-label" for="doc-country">البلد / المحافظة</label>
               <div class="input-group">
                 <span class="input-icon"><i class="bi bi-geo-alt-fill"></i></span>
                 <input id="doc-country" type="text" class="form-input" placeholder="الخرطوم">
@@ -300,7 +314,7 @@
 
           <!-- Doc expiry -->
           <div class="form-group">
-            <label class="form-label" for="doc-expiry">تاريخ انتهاء الوثيقة (اختياري)</label>
+            <label class="form-label" id="doc-expiry-label" for="doc-expiry">تاريخ انتهاء الوثيقة (اختياري)</label>
             <div class="input-group">
               <span class="input-icon"><i class="bi bi-calendar3"></i></span>
               <input id="doc-expiry" type="date" class="form-input">
@@ -309,24 +323,24 @@
 
           <!-- Front image -->
           <div class="form-group">
-            <label class="form-label">صورة الوجه الأمامي للوثيقة *</label>
+            <label class="form-label" id="doc-front-label">صورة الوجه الأمامي للوثيقة *</label>
             <div class="upload-zone">
               <input type="file" id="doc-front" accept="image/*" required onchange="previewPhoto(this,'doc-front-preview')">
               <i class="bi bi-card-image"></i>
-              <div class="upload-label">انقر لرفع الوجه الأمامي</div>
-              <div class="upload-hint">تأكد أن البيانات واضحة وقابلة للقراءة</div>
+              <div class="upload-label" id="doc-front-upload">انقر لرفع الوجه الأمامي</div>
+              <div class="upload-hint" id="doc-front-hint">تأكد أن البيانات واضحة وقابلة للقراءة</div>
             </div>
             <img id="doc-front-preview" class="upload-preview" alt="معاينة أمامية">
           </div>
 
           <!-- Back image -->
           <div class="form-group" id="doc-back-group" style="display:none;">
-            <label class="form-label">صورة الوجه الخلفي *</label>
+            <label class="form-label" id="doc-back-label">صورة الوجه الخلفي *</label>
             <div class="upload-zone">
               <input type="file" id="doc-back" accept="image/*" onchange="previewPhoto(this,'doc-back-preview')">
               <i class="bi bi-card-image"></i>
-              <div class="upload-label">انقر لرفع الوجه الخلفي</div>
-              <div class="upload-hint">تأكد أن البيانات واضحة</div>
+              <div class="upload-label" id="doc-back-upload">انقر لرفع الوجه الخلفي</div>
+              <div class="upload-hint" id="doc-back-hint">تأكد أن البيانات واضحة</div>
             </div>
             <img id="doc-back-preview" class="upload-preview" alt="معاينة خلفية">
           </div>
@@ -341,7 +355,7 @@
 
           <div style="display:flex;gap:12px;">
             <button type="button" class="btn btn-outline" style="flex:0 0 auto;" onclick="goToStep(1)">
-              <i class="bi bi-arrow-right"></i> رجوع
+              <i class="bi bi-arrow-right"></i> <span id="step2-back-text">رجوع</span>
             </button>
             <button type="button" class="btn btn-primary" style="flex:1; border-radius:50px;" id="register-btn" onclick="handleFinalSubmit()">
               <span id="register-btn-text">إرسال الطلب</span>
@@ -424,6 +438,114 @@
   </div>
 
   <script>
+    // ─── Language Strings ─────────────────────────────────────────────────────
+    const LANG_STRINGS = {
+      ar: {
+        dir: 'rtl', lang: 'ar',
+        appname: 'تـكـافـل',
+        slogan: 'نبض العطاء وإشراقة الأمل',
+        tabLogin: 'تسجيل الدخول',
+        tabRegister: 'حساب جديد',
+        email: 'البريد الإلكتروني',
+        password: 'كلمة المرور',
+        forgotPwd: 'نسيت كلمة المرور؟',
+        loginBtn: 'تسجيل الدخول',
+        googleBtn: 'المتابعة باستخدام جوجل',
+        or: 'أو',
+        accountType: 'نوع الحساب', donor: 'متبرع', beneficiary: 'مستفيد', volunteer: 'متطوع',
+        fullName: 'الاسم الكامل *', phone: 'رقم الهاتف', personalPhoto: 'الصورة الشخصية (اختياري)', uploadPhoto: 'انقر لرفع صورة شخصية',
+        continueBtn: 'متابعة', identityStep: 'إثبات الهوية', basicStep: 'البيانات الأساسية',
+        identityRequired: 'التحقق من الهوية مطلوب', identityNotice: 'لحماية مجتمع تكافل، يرجى رفع وثيقة هوية سارية. سيتم مراجعة طلبك خلال 24 ساعة.',
+        identityType: 'نوع وثيقة الهوية *', nationalNumber: 'رقم وطني', nationalId: 'بطاقة قومية', passport: 'جواز سفر',
+        documentNumber: 'رقم الوثيقة *', country: 'البلد / المحافظة', expiry: 'تاريخ انتهاء الوثيقة (اختياري)',
+        frontImage: 'صورة الوجه الأمامي للوثيقة *', uploadFront: 'انقر لرفع الوجه الأمامي', clearData: 'تأكد أن البيانات واضحة وقابلة للقراءة',
+        backImage: 'صورة الوجه الخلفي *', uploadBack: 'انقر لرفع الوجه الخلفي', clearShort: 'تأكد أن البيانات واضحة',
+        reason: 'سبب التسجيل / احتياجاتك', reasonPlaceholder: 'اكتب نبذة عن نفسك وسبب تسجيلك في تكافل...',
+        backBtn: 'رجوع', submitRequest: 'إرسال الطلب', strength: 'قوة كلمة المرور', weak: 'ضعيفة', medium: 'متوسطة', strong: 'قوية', characters: 'أحرف', ruleLength: '8 أحرف على الأقل', ruleUpper: 'حرف كبير (A-Z)', ruleNumber: 'رقم (0-9)', ruleSpecial: 'رمز خاص (!@#)',
+        langBtn: 'EN'
+      },
+      en: {
+        dir: 'ltr', lang: 'en',
+        appname: 'Takaful',
+        slogan: 'The Pulse of Giving & Hope',
+        tabLogin: 'Sign In',
+        tabRegister: 'Create Account',
+        email: 'Email Address',
+        password: 'Password',
+        forgotPwd: 'Forgot Password?',
+        loginBtn: 'Sign In',
+        googleBtn: 'Continue with Google',
+        or: 'OR',
+        accountType: 'Account Type', donor: 'Donor', beneficiary: 'Beneficiary', volunteer: 'Volunteer',
+        fullName: 'Full Name *', phone: 'Phone Number', personalPhoto: 'Profile Photo (optional)', uploadPhoto: 'Click to upload a profile photo',
+        continueBtn: 'Continue', identityStep: 'Identity Verification', basicStep: 'Basic Information',
+        identityRequired: 'Identity verification required', identityNotice: 'To protect the Takaful community, please upload a valid identity document. Your request will be reviewed within 24 hours.',
+        identityType: 'Identity document type *', nationalNumber: 'National Number', nationalId: 'National ID', passport: 'Passport',
+        documentNumber: 'Document Number *', country: 'Country / State', expiry: 'Document expiry date (optional)',
+        frontImage: 'Front image of document *', uploadFront: 'Click to upload the front side', clearData: 'Make sure the information is clear and readable',
+        backImage: 'Back image *', uploadBack: 'Click to upload the back side', clearShort: 'Make sure the information is clear',
+        reason: 'Reason for registration / needs', reasonPlaceholder: 'Tell us briefly about yourself and why you are joining Takaful...',
+        backBtn: 'Back', submitRequest: 'Submit Request', strength: 'Password strength', weak: 'Weak', medium: 'Medium', strong: 'Strong', characters: 'characters', ruleLength: 'At least 8 characters', ruleUpper: 'Uppercase letter (A-Z)', ruleNumber: 'Number (0-9)', ruleSpecial: 'Special symbol (!@#)',
+        langBtn: 'Ar'
+      }
+    };
+
+    let currentLang = localStorage.getItem('takaful-donor-lang') || 'ar';
+
+    function applyLang(lang) {
+      const s = LANG_STRINGS[lang];
+      document.documentElement.setAttribute('lang', s.lang);
+      document.documentElement.setAttribute('dir', s.dir);
+      
+      const el = (id, text) => { const e = document.getElementById(id); if(e) e.textContent = text; };
+      
+      el('txt-appname', s.appname);
+      el('txt-slogan', s.slogan);
+      el('tab-login', s.tabLogin);
+      el('tab-register', s.tabRegister);
+      el('lbl-email', s.email);
+      el('lbl-password', s.password);
+      el('lbl-forgot', s.forgotPwd);
+      el('login-btn-text', s.loginBtn);
+      el('txt-google', s.googleBtn);
+      el('txt-or', s.or);
+      el('role-type-label', s.accountType); el('role-donor-text', s.donor); el('role-beneficiary-text', s.beneficiary); el('role-volunteer-text', s.volunteer);
+      el('lbl-reg-name', s.fullName); el('lbl-reg-email', `${s.email} *`); el('lbl-reg-password', `${s.password} *`); el('lbl-reg-phone', s.phone); el('lbl-reg-photo', s.personalPhoto); el('photo-upload-label', s.uploadPhoto);
+      el('step1-btn-text', s.continueBtn); el('sp-1-label', s.basicStep); el('sp-2-label', s.identityStep);
+      el('identity-required', s.identityRequired); el('identity-notice', s.identityNotice); el('identity-type-label', s.identityType);
+      el('doc-national-number', s.nationalNumber); el('doc-national-id', s.nationalId); el('doc-passport', s.passport);
+      el('doc-number-label', s.documentNumber); el('doc-country-label', s.country); el('doc-expiry-label', s.expiry);
+      el('doc-front-label', s.frontImage); el('doc-front-upload', s.uploadFront); el('doc-front-hint', s.clearData);
+      el('doc-back-label', s.backImage); el('doc-back-upload', s.uploadBack); el('doc-back-hint', s.clearShort);
+      el('reason-label', s.reason); const reasonInput = document.getElementById('reg-reason'); if (reasonInput) reasonInput.placeholder = s.reasonPlaceholder;
+      el('step2-back-text', s.backBtn); el('register-btn-text', s.submitRequest); el('google-register-text', s.googleBtn);
+      el('rule-length-text', s.ruleLength); el('rule-upper-text', s.ruleUpper); el('rule-number-text', s.ruleNumber); el('rule-special-text', s.ruleSpecial);
+      updatePasswordStrength();
+      
+      document.getElementById('lang-toggle-label').textContent = s.langBtn;
+      const langToggle = document.getElementById('lang-toggle');
+      const langToggleIcon = document.getElementById('lang-toggle-icon');
+      langToggle.setAttribute('aria-label', lang === 'ar' ? 'التبديل إلى الإنجليزية' : 'Switch to Arabic');
+      langToggleIcon.classList.toggle('flag-uk', lang === 'ar');
+      langToggleIcon.classList.toggle('flag-sudan', lang === 'en');
+      langToggle.classList.toggle('is-ar', lang === 'ar');
+      langToggle.classList.toggle('is-en', lang === 'en');
+      langToggleIcon.textContent = lang === 'ar' ? '🇬🇧' : '🇸🇩';
+      langToggle.classList.remove('is-changing');
+      void langToggle.offsetWidth;
+      langToggle.classList.add('is-changing');
+      
+    }
+
+    function toggleLang() {
+      currentLang = (currentLang === 'ar') ? 'en' : 'ar';
+      localStorage.setItem('takaful-donor-lang', currentLang);
+      applyLang(currentLang);
+    }
+
+    // Apply on load
+    applyLang(currentLang);
+
     // ── Theme ──
     (function () {
       document.documentElement.setAttribute('data-theme','dark');
@@ -451,12 +573,17 @@
       themeIconMoon.style.background = isLight ? 'transparent' : 'rgba(99,102,241,0.8)';
       themeIconMoon.style.boxShadow = isLight ? 'none' : '0 2px 8px rgba(99,102,241,0.5)';
       themeIconMoon.style.color = isLight ? 'rgba(99,102,241,0.3)' : '#fff';
+      themeIconSun.classList.toggle('is-active', isLight);
+      themeIconMoon.classList.toggle('is-active', !isLight);
     }
     updateThemeIcon();
     themeToggleBtn.addEventListener('click', () => {
       const isLight = document.documentElement.getAttribute('data-theme') === 'light';
       const newTheme = isLight ? 'dark' : 'light';
       document.documentElement.setAttribute('data-theme', newTheme);
+      themeToggleBtn.classList.remove('is-changing');
+      void themeToggleBtn.offsetWidth;
+      themeToggleBtn.classList.add('is-changing');
       localStorage.setItem('takaful-theme-mode', newTheme);
       updateThemeIcon();
     });
@@ -473,6 +600,42 @@
         reader.readAsDataURL(input.files[0]);
       }
     }
+
+    // ── Live Password Strength ──
+    function updatePasswordStrength() {
+      const input = document.getElementById('reg-password');
+      const panel = document.getElementById('password-strength');
+      if (!input || !panel) return;
+      const value = input.value;
+      const isEnglish = currentLang === 'en';
+      const checks = {
+        length: value.length >= 8,
+        upper: /[A-Z]/.test(value),
+        number: /\d/.test(value),
+        special: /[^A-Za-z0-9]/.test(value)
+      };
+      const score = Object.values(checks).filter(Boolean).length;
+      panel.classList.toggle('visible', value.length > 0);
+      const fill = document.getElementById('password-strength-fill');
+      const label = document.getElementById('password-strength-label');
+      const count = document.getElementById('password-strength-count');
+      const level = score <= 1 ? 'weak' : score <= 3 ? 'medium' : 'strong';
+      fill.className = `password-strength-fill ${value ? level : ''}`;
+      fill.style.width = `${value ? Math.max(18, score * 25) : 0}%`;
+      label.className = `password-strength-label ${value ? level : ''}`;
+      label.textContent = value ? (isEnglish ? LANG_STRINGS.en[level] : LANG_STRINGS.ar[level]) : '';
+      count.textContent = value ? `${value.length} ${isEnglish ? LANG_STRINGS.en.characters : LANG_STRINGS.ar.characters}` : '';
+      Object.entries(checks).forEach(([name, valid]) => {
+        const rule = document.getElementById(`rule-${name}`);
+        if (!rule) return;
+        rule.classList.toggle('valid', valid);
+        const icon = rule.querySelector('i');
+        icon.className = valid ? 'bi bi-check-circle-fill' : 'bi bi-circle';
+      });
+      input.setAttribute('aria-describedby', 'password-strength');
+    }
+
+    document.getElementById('reg-password')?.addEventListener('input', updatePasswordStrength);
 
     // ── Password Toggle ──
     function togglePassword(inputId, iconSpan) {
@@ -573,11 +736,11 @@
             const reason = document.getElementById('reg-reason');
             const reasonLabel = document.getElementById('reason-label');
             if (e.target.value === 'volunteer') {
-              reasonLabel.textContent = 'مهاراتك وخبراتك التطوعية *';
-              if (reason) reason.placeholder = 'ما هي مهاراتك؟ ما المجالات التي تريد التطوع فيها؟';
+              reasonLabel.textContent = currentLang === 'en' ? 'Volunteer skills and experience *' : 'مهاراتك وخبراتك التطوعية *';
+              if (reason) reason.placeholder = currentLang === 'en' ? 'What are your skills? Which areas would you like to volunteer in?' : 'ما هي مهاراتك؟ ما المجالات التي تريد التطوع فيها؟';
             } else {
-              reasonLabel.textContent = 'سبب التسجيل / احتياجاتك';
-              if (reason) reason.placeholder = 'اكتب نبذة عن نفسك وسبب تسجيلك في تكافل...';
+              reasonLabel.textContent = currentLang === 'en' ? 'Reason for registration / needs' : 'سبب التسجيل / احتياجاتك';
+              if (reason) reason.placeholder = currentLang === 'en' ? 'Tell us briefly about yourself and why you are joining Takaful...' : 'اكتب نبذة عن نفسك وسبب تسجيلك في تكافل...';
             }
           }
         });
@@ -635,7 +798,7 @@
       const role = document.querySelector('input[name="reg-role"]:checked').value;
 
       if (!name || !email || !password) { showError('يرجى ملء الاسم والبريد وكلمة المرور'); return; }
-      if (password.length < 6) { showError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+      if (password.length < 8) { showError(currentLang === 'en' ? 'Password must be at least 8 characters' : 'كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
 
       // Donor/Admin don't need verification
       if (role === 'donor' || role === 'admin') {
