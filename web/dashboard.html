@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="لوحة تحكم تكافل — إدارة الحالات الإنسانية والتبرعات">
   <title>تكافل — لوحة التحكم الذكية</title>
   <link rel="icon" type="image/webp" href="app-icon.webp">
@@ -113,17 +113,26 @@ function App() {
   const [users,setUsers]   = useState([]);
   const [chats,setChats]   = useState([]);
   const [loading,setLoad]  = useState(true);
+  const [authError,setAuthError] = useState('');
   const [shares,setShares] = useState([]);
   const [activeChatId,setChat] = useState(null);
   const [msgs,setMsgs]     = useState([]);
   const [msgIn,setMsgIn]   = useState('');
   const [clock,setClock]   = useState('');
   const [dark,setDark]     = useState(()=>(localStorage.getItem('tk-t')||'dark')==='dark');
+  const [lang,setLang]     = useState(()=>localStorage.getItem('takaful-lang')||'ar');
+  const isAr = lang === 'ar';
+  useEffect(()=>{
+    document.documentElement.setAttribute('lang',lang);
+    document.documentElement.setAttribute('dir',isAr?'rtl':'ltr');
+  },[lang,isAr]);
+  const toggleLang = () => { const nl = isAr ? 'en' : 'ar'; setLang(nl); localStorage.setItem('takaful-lang',nl); document.documentElement.setAttribute('lang',nl); document.documentElement.setAttribute('dir',nl==='ar'?'rtl':'ltr'); const button = document.querySelector('.language-toggle'); if (button) { button.classList.remove('is-changing'); void button.offsetWidth; button.classList.add('is-changing'); } };
   const [assignModal,setAssignModal] = useState(null);
   const [openNewCase,setOpenNewCase] = useState(false);
   const [verifications,setVerifications] = useState([]);
   const [activityLogs,setActivityLogs] = useState([]);
   const [sysSettings,setSysSettings] = useState(null);
+  const [sidebarOpen,setSidebarOpen] = useState(false);
 
   const logActivity = async (action, details) => {
     try {
@@ -143,9 +152,18 @@ function App() {
   },[dark]);
 
   useEffect(()=>{
+    document.documentElement.setAttribute('lang',lang);
+    document.documentElement.setAttribute('dir',lang==='ar'?'rtl':'ltr');
+    localStorage.setItem('takaful-lang',lang);
+  },[lang]);
+
+  useEffect(()=>{
     const unsub = requireAuth(async user=>{
       const info = await getCurrentUserInfo(user.uid);
       setUserInfo(info); setLoad(false);
+    }, error=>{
+      setAuthError(error.message || 'تعذر التحقق من صلاحيات الحساب');
+      setLoad(false);
     });
     const tick = setInterval(()=>setClock(
       new Intl.DateTimeFormat('ar-SA',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date())
@@ -354,51 +372,92 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
     </div>
   );
 
+  if(authError)return(
+    <div className="d-flex align-items-center justify-content-center" style={{minHeight:'100dvh',background:'var(--bg-dark)'}}>
+      <div className="text-center p-4">
+        <i className="bi bi-exclamation-triangle text-warning" style={{fontSize:'2.5rem'}}></i>
+        <p className="mt-3" style={{color:'var(--text-secondary)',fontFamily:'inherit'}}>{authError}</p>
+        <button className="btn btn-primary" onClick={()=>{window.location.href='index.html'}}>العودة إلى تسجيل الدخول</button>
+      </div>
+    </div>
+  );
+
   const pending  = cases.filter(c=>c.status==='pending');
   const approved = cases.filter(c=>c.status==='approved');
   const totalAmt = donations.reduce((s,d)=>s+(parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0),0);
 
-  const NAV_GROUPS={'main':'الرئيسية','data':'إدارة البيانات','analytics':'التحليلات والتقارير','system':'إعدادات النظام'};
-  const NAV=[
-    {id:'home',l:'الرئيسية',icon:'bi-grid-1x2-fill',g:'main'},
-    {id:'pending',l:'الحالات المعلقة',icon:'bi-hourglass-split',g:'main',badge:pending.length},
-    {id:'cases',l:'جميع الحالات',icon:'bi-journal-medical',g:'main'},
-    {id:'tracking',l:'تتبع المتطوعين',icon:'bi-geo-alt-fill',g:'main'},
-    {id:'donations',l:'التبرعات',icon:'bi-heart-fill',g:'data'},
-    {id:'users',l:'المستخدمون',icon:'bi-people-fill',g:'data'},
-    {id:'verifications',l:'التحقق من الهوية',icon:'bi-shield-check',g:'data',badge:verifications.filter(v=>v.verificationStatus==='pending').length},
-    {id:'chats',l:'الدعم',icon:'bi-chat-dots-fill',g:'data'},
-    {id:'reports',l:'التقارير المالية',icon:'bi-bar-chart-fill',g:'analytics'},
-    {id:'shares',l:'المشاركات',icon:'bi-share-fill',g:'analytics'},
-    {id:'activity',l:'سجل العمليات',icon:'bi-clock-history',g:'system'},
-    {id:'settings',l:'إعدادات النظام',icon:'bi-gear-fill',g:'system'}
+  const NAV_GROUPS = isAr
+    ? {main:'الرئيسية', data:'إدارة البيانات', analytics:'التحليلات والتقارير', system:'إعدادات النظام'}
+    : {main:'Main', data:'Data Management', analytics:'Analytics & Reports', system:'System Settings'};
+
+  const NAV = isAr ? [
+    {id:'home',       l:'الرئيسية',           icon:'bi-grid-1x2-fill',    g:'main'},
+    {id:'pending',    l:'الحالات المعلقة',    icon:'bi-hourglass-split',   g:'main', badge:pending.length},
+    {id:'cases',      l:'جميع الحالات',       icon:'bi-journal-medical',   g:'main'},
+    {id:'tracking',   l:'تتبع المتطوعين',     icon:'bi-geo-alt-fill',      g:'main'},
+    {id:'donations',  l:'التبرعات',           icon:'bi-heart-fill',        g:'data'},
+    {id:'users',      l:'المستخدمون',         icon:'bi-people-fill',       g:'data'},
+    {id:'verifications',l:'التحقق من الهوية',icon:'bi-shield-check',      g:'data', badge:verifications.filter(v=>v.verificationStatus==='pending').length},
+    {id:'chats',      l:'الدعم',             icon:'bi-chat-dots-fill',    g:'data'},
+    {id:'reports',    l:'التقارير المالية',   icon:'bi-bar-chart-fill',    g:'analytics'},
+    {id:'shares',     l:'المشاركات',         icon:'bi-share-fill',        g:'analytics'},
+    {id:'activity',   l:'سجل العمليات',      icon:'bi-clock-history',     g:'system'},
+    {id:'settings',   l:'إعدادات النظام',    icon:'bi-gear-fill',         g:'system'},
+  ] : [
+    {id:'home',       l:'Dashboard',          icon:'bi-grid-1x2-fill',    g:'main'},
+    {id:'pending',    l:'Pending Cases',       icon:'bi-hourglass-split',   g:'main', badge:pending.length},
+    {id:'cases',      l:'All Cases',           icon:'bi-journal-medical',   g:'main'},
+    {id:'tracking',   l:'Volunteer Tracking',  icon:'bi-geo-alt-fill',      g:'main'},
+    {id:'donations',  l:'Donations',           icon:'bi-heart-fill',        g:'data'},
+    {id:'users',      l:'Users',               icon:'bi-people-fill',       g:'data'},
+    {id:'verifications',l:'ID Verifications',  icon:'bi-shield-check',      g:'data', badge:verifications.filter(v=>v.verificationStatus==='pending').length},
+    {id:'chats',      l:'Support',             icon:'bi-chat-dots-fill',    g:'data'},
+    {id:'reports',    l:'Financial Reports',   icon:'bi-bar-chart-fill',    g:'analytics'},
+    {id:'shares',     l:'Shares',              icon:'bi-share-fill',        g:'analytics'},
+    {id:'activity',   l:'Activity Log',        icon:'bi-clock-history',     g:'system'},
+    {id:'settings',   l:'System Settings',     icon:'bi-gear-fill',         g:'system'},
   ];
-  const TTLS={
-    home:['لوحة القيادة','متابعة إحصائيات تكافل'],
-    pending:['الحالات المعلقة','مراجعة الحالات المقدمة'],
-    cases:['جميع الحالات','إدارة وتحديث الحالات'],
-    tracking:['تتبع المتطوعين','خريطة حية لمتابعة المتطوعين الميدانيين'],
-    donations:['التبرعات والمساهمات','إدارة التبرعات والحوالات'],
-    users:['المستخدمون','إدارة حسابات المستخدمين'],
-    verifications:['التحقق من الهوية','مراجعة طلبات التحقق للمستفيدين والمتطوعين'],
-    chats:['الدعم والمحادثات','التواصل مع المستخدمين'],
-    reports:['التقارير المالية','إحصاءات وتحليلات مالية تفاعلية'],
-    shares:['المشاركات','تتبع انتشار حملات التبرع'],
-    activity:['سجل العمليات','تتبع حركات ومسؤوليات النظام'],
-    settings:['إعدادات النظام','إدارة إعدادات الموقع وتطبيق الأندرويد']
+
+  const TTLS = isAr ? {
+    home:          ['لوحة القيادة',            'متابعة إحصائيات تكافل'],
+    pending:       ['الحالات المعلقة',          'مراجعة الحالات المقدمة'],
+    cases:         ['جميع الحالات',            'إدارة وتحديث الحالات'],
+    tracking:      ['تتبع المتطوعين',          'خريطة حية لمتابعة المتطوعين الميدانيين'],
+    donations:     ['التبرعات والمساهمات',     'إدارة التبرعات والحوالات'],
+    users:         ['المستخدمون',              'إدارة حسابات المستخدمين'],
+    verifications: ['التحقق من الهوية',        'مراجعة طلبات التحقق للمستفيدين والمتطوعين'],
+    chats:         ['الدعم والمحادثات',         'التواصل مع المستخدمين'],
+    reports:       ['التقارير المالية',         'إحصاءات وتحليلات مالية تفاعلية'],
+    shares:        ['المشاركات',               'تتبع انتشار حملات التبرع'],
+    activity:      ['سجل العمليات',             'تتبع حركات ومسؤوليات النظام'],
+    settings:      ['إعدادات النظام',           'إدارة إعدادات الموقع وتطبيق الأندرويد'],
+  } : {
+    home:          ['Dashboard',               'Track Takaful statistics'],
+    pending:       ['Pending Cases',            'Review submitted cases'],
+    cases:         ['All Cases',               'Manage and update cases'],
+    tracking:      ['Volunteer Tracking',       'Live map of field volunteers'],
+    donations:     ['Donations & Contributions','Manage donations and transfers'],
+    users:         ['Users',                   'Manage user accounts'],
+    verifications: ['ID Verifications',         'Review verification requests'],
+    chats:         ['Support & Chats',          'Communicate with users'],
+    reports:       ['Financial Reports',        'Interactive financial stats & analytics'],
+    shares:        ['Shares',                  'Track donation campaign reach'],
+    activity:      ['Activity Log',             'Track system actions & responsibilities'],
+    settings:      ['System Settings',          'Manage site settings & Android app'],
   };
 
   return (
     <div className="dashboard-layout">
       {/* SIDEBAR */}
-      <aside className="sidebar">
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={()=>setSidebarOpen(false)}></div>}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <div className="sidebar-logo" style={{background:'transparent', boxShadow:'none'}}>
-            <img src="app-icon.webp" alt="Takaful Logo" style={{width:'100%', height:'100%', objectFit:'contain', filter: 'drop-shadow(0px 4px 12px rgba(232, 80, 10, 0.35))'}} />
+          <div className="sidebar-logo">
+            <img src="app-icon.webp" alt="Takaful Logo" />
           </div>
           <div className="sidebar-brand">
-            <h2>تـكـافـل</h2>
-            <p>بوابة التحكم</p>
+            <h2>{isAr ? 'تـكـافـل' : 'Takaful'}</h2>
+            <p>{isAr ? 'بوابة التحكم' : 'Admin Portal'}</p>
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -432,7 +491,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
               onMouseEnter={e=>{e.currentTarget.style.background='rgba(239,68,68,0.2)'}}
               onMouseLeave={e=>{e.currentTarget.style.background='rgba(239,68,68,0.1)'}}
             >
-              <i className="bi bi-box-arrow-right"></i> تسجيل الخروج
+              <i className="bi bi-box-arrow-right"></i> {isAr ? 'تسجيل الخروج' : 'Sign Out'}
             </button>
           </div>
         </div>
@@ -441,7 +500,8 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
       {/* MAIN */}
       <div className="main-content">
         <header className="topbar">
-          <div style={{flex:1}}>
+          <button className="mobile-menu-toggle" type="button" aria-label="Open menu" onClick={()=>setSidebarOpen(true)}><i className="bi bi-list"></i></button>
+          <div className="topbar-heading" style={{flex:1}}>
             <h1 className="topbar-title">{TTLS[page]?.[0]}</h1>
             <p className="topbar-subtitle">{TTLS[page]?.[1]}</p>
           </div>
@@ -454,7 +514,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
               onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
               onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
             >
-              <i className="bi bi-plus-circle-fill"></i>إضافة حالة
+              <i className="bi bi-plus-circle-fill"></i>{isAr ? 'إضافة حالة' : 'Add Case'}
             </button>
 
             {/* Live indicator */}
@@ -464,33 +524,45 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
             {/* Day/Night pill toggle */}
             <button
               type="button"
-              onClick={()=>setDark(d=>!d)}
+              onClick={()=>{setDark(d=>!d); requestAnimationFrame(()=>{const b=document.querySelector('.theme-toggle'); if(b){b.classList.remove('is-changing'); void b.offsetWidth; b.classList.add('is-changing');}})}}
+              className="theme-toggle"
               title={dark?'تفعيل الوضع النهاري':'تفعيل الوضع الليلي'}
               style={{display:'flex',alignItems:'center',padding:'5px 6px',borderRadius:'50px',background:dark?'rgba(20,20,50,0.95)':'rgba(255,210,60,0.15)',border:'1px solid',borderColor:dark?'rgba(100,100,255,0.25)':'rgba(249,168,37,0.4)',cursor:'pointer',transition:'all 0.35s ease',backdropFilter:'blur(10px)',gap:2,minWidth:70}}
             >
-              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'transparent':'#F9A825',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'none':'0 2px 8px rgba(249,168,37,0.5)'}}>☀️</span>
-              <span style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',background:dark?'rgba(99,102,241,0.85)':'transparent',transition:'all 0.35s ease',fontSize:14,boxShadow:dark?'0 2px 8px rgba(99,102,241,0.5)':'none'}}>🌙</span>
+              <span className={`theme-toggle-icon ${!dark ? 'is-active' : ''}`} aria-hidden="true"><i className="bi bi-sun-fill" /></span>
+              <span className={`theme-toggle-icon moon ${dark ? 'is-active' : ''}`} aria-hidden="true"><i className="bi bi-moon-stars-fill" /></span>
+            </button>
+
+            {/* Language Toggle */}
+            <button
+              type="button"
+              onClick={toggleLang}
+              title={isAr ? 'Switch to English' : 'التبديل للعربية'}
+              className={`language-toggle ${isAr ? 'is-ar' : 'is-en'}`}
+            >
+              <span className={`language-toggle-icon ${isAr ? 'flag-uk' : 'flag-sudan'}`} aria-hidden="true">{isAr ? '🇬🇧' : '🇸🇩'}</span>
+              <span className="language-toggle-label">{isAr ? 'EN' : 'Ar'}</span>
             </button>
           </div>
         </header>
         <main className="page-content">
-          {page==='home'      && <HomeView cases={cases} donations={donations} users={users} totalAmt={totalAmt} pending={pending} approved={approved} doApprove={doApprove} doReject={doReject} />}
-          {page==='pending'   && <PendingView cases={pending} doApprove={doApprove} doReject={doReject} doDelCase={doDelCase} />}
-          {page==='cases'     && <CasesView cases={cases} users={users} doApprove={doApprove} doReject={doReject} doComplete={doComplete} doDelCase={doDelCase} doUpdateRaisedAmount={doUpdateRaisedAmount} setAssignModal={setAssignModal} openNewCase={openNewCase} setOpenNewCase={setOpenNewCase} />}
-          {page==='tracking'  && <TrackingView users={users} cases={cases} />}
-          {page==='donations' && <DonationsView donations={donations} cases={cases} users={users} doDonStat={doDonStat} doDelDon={doDelDon} doConfirmReceived={doConfirmReceived} doConfirmDistributed={doConfirmDistributed} />}
-          {page==='users'     && <UsersView users={users} doToggle={doToggle} doDelUser={doDelUser} doChangeRole={doChangeRole} />}
-          {page==='verifications' && <VerificationsView verifications={verifications} doDelVerification={doDelVerification} />}
-          {page==='chats'     && <ChatsView chats={chats} msgs={msgs} activeChatId={activeChatId} setChat={setChat} sendMsg={sendMsg} msgIn={msgIn} setMsgIn={setMsgIn} userInfo={userInfo} users={users} doDelMsg={doDelMsg} doEditMsg={doEditMsg} doDelChat={doDelChat} />}
-          {page==='reports'   && <ReportsView donations={donations} cases={cases} users={users} />}
-          {page==='shares'    && <SharesView shares={shares} cases={cases} />}
-          {page==='activity'  && <ActivityView logs={activityLogs} doDelLog={doDelLog} doClearLogs={doClearLogs} />}
-          {page==='settings'  && <SettingsView sysSettings={sysSettings} logActivity={logActivity} cases={cases} users={users} donations={donations} activityLogs={activityLogs} />}
+          {page==='home'      && <HomeView cases={cases} donations={donations} users={users} totalAmt={totalAmt} pending={pending} approved={approved} doApprove={doApprove} doReject={doReject} isAr={isAr} />}
+          {page==='pending'   && <PendingView cases={pending} doApprove={doApprove} doReject={doReject} doDelCase={doDelCase} isAr={isAr} />}
+          {page==='cases'     && <CasesView cases={cases} users={users} doApprove={doApprove} doReject={doReject} doComplete={doComplete} doDelCase={doDelCase} doUpdateRaisedAmount={doUpdateRaisedAmount} setAssignModal={setAssignModal} openNewCase={openNewCase} setOpenNewCase={setOpenNewCase} isAr={isAr} />}
+          {page==='tracking'  && <TrackingView users={users} cases={cases} isAr={isAr} />}
+          {page==='donations' && <DonationsView donations={donations} cases={cases} users={users} doDonStat={doDonStat} doDelDon={doDelDon} doConfirmReceived={doConfirmReceived} doConfirmDistributed={doConfirmDistributed} isAr={isAr} />}
+          {page==='users'     && <UsersView users={users} doToggle={doToggle} doDelUser={doDelUser} doChangeRole={doChangeRole} isAr={isAr} />}
+          {page==='verifications' && <VerificationsView verifications={verifications} doDelVerification={doDelVerification} isAr={isAr} />}
+          {page==='chats'     && <ChatsView chats={chats} msgs={msgs} activeChatId={activeChatId} setChat={setChat} sendMsg={sendMsg} msgIn={msgIn} setMsgIn={setMsgIn} userInfo={userInfo} users={users} doDelMsg={doDelMsg} doEditMsg={doEditMsg} doDelChat={doDelChat} isAr={isAr} />}
+          {page==='reports'   && <ReportsView donations={donations} cases={cases} users={users} isAr={isAr} />}
+          {page==='shares'    && <SharesView shares={shares} cases={cases} isAr={isAr} />}
+          {page==='activity'  && <ActivityView logs={activityLogs} doDelLog={doDelLog} doClearLogs={doClearLogs} isAr={isAr} />}
+          {page==='settings'  && <SettingsView sysSettings={sysSettings} logActivity={logActivity} cases={cases} users={users} donations={donations} activityLogs={activityLogs} isAr={isAr} />}
         </main>
       </div>
 
       {/* VOLUNTEER ASSIGN MODAL */}
-      {assignModal && <AssignVolunteerModal caseItem={assignModal} users={users} onClose={()=>setAssignModal(null)} />}
+      {assignModal && <AssignVolunteerModal caseItem={assignModal} users={users} onClose={()=>setAssignModal(null)} isAr={isAr} />}
     </div>
   );
 }
@@ -498,14 +570,14 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
 // ══════════════════════════════════════════
 // HOME VIEW
 // ══════════════════════════════════════════
-function HomeView({cases,donations,pending,approved,totalAmt,users,doApprove,doReject}) {
+function HomeView({cases,donations,pending,approved,totalAmt,users,doApprove,doReject,isAr}) {
   const completed=cases.filter(c=>c.status==='completed');
   const rejected =cases.filter(c=>c.status==='rejected');
   const STATS=[
-    {l:'الحالات الكلية',v:cases.length,   sub:`${approved.length} معتمدة`,  icon:'bi-journal-medical',c:'stat-green'},
-    {l:'حالات معلقة',   v:pending.length,  sub:'تحتاج مراجعة',              icon:'bi-hourglass-split', c:'stat-gold'},
-    {l:'المستخدمون',    v:users.length,    sub:'مسجّل في النظام',           icon:'bi-people-fill',     c:'stat-blue'},
-    {l:'إجمالي التبرعات',v:`${totalAmt.toLocaleString('ar')} ج.س`,sub:`${donations.length} عملية`,icon:'bi-heart-fill',c:'stat-red'},
+    {l:isAr?'الحالات الكلية':'Total Cases',v:cases.length, sub:isAr?`${approved.length} معتمدة`:`${approved.length} Approved`, icon:'bi-journal-medical',c:'stat-green'},
+    {l:isAr?'حالات معلقة':'Pending Cases', v:pending.length, sub:isAr?'تحتاج مراجعة':'Needs Review', icon:'bi-hourglass-split', c:'stat-gold'},
+    {l:isAr?'المستخدمون':'Users', v:users.length, sub:isAr?'مسجّل في النظام':'Registered in system', icon:'bi-people-fill', c:'stat-blue'},
+    {l:isAr?'إجمالي التبرعات':'Total Donations',v:`${totalAmt.toLocaleString(isAr?'ar':'en')} ${isAr?'ج.س':'SDG'}`,sub:isAr?`${donations.length} عملية`:`${donations.length} transactions`,icon:'bi-heart-fill',c:'stat-red'},
   ];
   return (
     <div>
@@ -528,26 +600,26 @@ function HomeView({cases,donations,pending,approved,totalAmt,users,doApprove,doR
               <div className="card-title">
                 <i className="bi bi-hourglass-split card-title-icon" style={{color:'var(--gold)'}}></i>
                 <div>
-                  <div className="bold">أحدث الحالات المعلقة</div>
-                  <div className="text-muted text-xs">في انتظار مراجعتك</div>
+                  <div className="bold">{isAr ? 'أحدث الحالات المعلقة' : 'Recent Pending Cases'}</div>
+                  <div className="text-muted text-xs">{isAr ? 'في انتظار مراجعتك' : 'Awaiting your review'}</div>
                 </div>
               </div>
-              <span className="badge badge-pending">{pending.length} حالة</span>
+              <span className="badge badge-pending">{isAr ? `${pending.length} حالة` : `${pending.length} cases`}</span>
             </div>
             <div className="card-body p-0">
               {pending.length===0
-                ? <Empty icon="bi-check-all" title="لا توجد حالات معلقة" sub="أُنجزت جميع المراجعات!" />
+                ? <Empty icon="bi-check-all" title={isAr ? "لا توجد حالات معلقة" : "No pending cases"} sub={isAr ? "أُنجزت جميع المراجعات!" : "All reviews completed!"} />
                 : pending.slice(0,5).map(c=>(
                   <div key={c.id} className="d-flex align-items-center gap-3 px-4 py-3" style={{borderBottom:'1px solid var(--border)'}}>
                     <Av name={c.applicantName} size={32} />
                     <div style={{flex:1,minWidth:0}}>
-                      <div className="bold truncate" style={{fontSize:'14px'}}>{c.applicantName||c.title||'غير محدد'}</div>
+                      <div className="bold truncate" style={{fontSize:'14px'}}>{c.applicantName||c.title||(isAr ? 'غير محدد' : 'N/A')}</div>
                       <div className="text-muted text-xs truncate">{c.title||'—'} • {c.location||c.city||''}</div>
                     </div>
                     <span className={catBadge(c.category)}>{c.category}</span>
                     <div className="d-flex gap-2">
-                      <button className="btn btn-icon btn-approve btn-sm" onClick={()=>doApprove(c.id,c.title||c.applicantName)} title="موافقة"><i className="bi bi-check-lg"></i></button>
-                      <button className="btn btn-icon btn-reject btn-sm" onClick={()=>doReject(c.id,c.title||c.applicantName)} title="رفض"><i className="bi bi-x-lg"></i></button>
+                      <button className="btn btn-icon btn-approve btn-sm" onClick={()=>doApprove(c.id,c.title||c.applicantName)} title={isAr ? "موافقة" : "Approve"}><i className="bi bi-check-lg"></i></button>
+                      <button className="btn btn-icon btn-reject btn-sm" onClick={()=>doReject(c.id,c.title||c.applicantName)} title={isAr ? "رفض" : "Reject"}><i className="bi bi-x-lg"></i></button>
                     </div>
                   </div>
                 ))
@@ -560,15 +632,15 @@ function HomeView({cases,donations,pending,approved,totalAmt,users,doApprove,doR
             <div className="card-header">
               <div className="card-title">
                 <i className="bi bi-pie-chart-fill card-title-icon" style={{color:'var(--primary)'}}></i>
-                <div className="bold">ملخص الحالات</div>
+                <div className="bold">{isAr ? 'ملخص الحالات' : 'Cases Summary'}</div>
               </div>
             </div>
             <div className="card-body">
               {[
-                {l:'معلقة',  v:pending.length,   c:'var(--gold)',i:'bi-hourglass-split'},
-                {l:'معتمدة', v:approved.length,  c:'var(--primary-light)',i:'bi-check-circle-fill'},
-                {l:'مكتملة', v:completed.length, c:'var(--blue-light)',i:'bi-star-fill'},
-                {l:'مرفوضة', v:rejected.length,  c:'var(--red-light)',i:'bi-x-circle-fill'},
+                {l:isAr?'معلقة':'Pending',  v:pending.length,   c:'var(--gold)',i:'bi-hourglass-split'},
+                {l:isAr?'معتمدة':'Approved', v:approved.length,  c:'var(--primary-light)',i:'bi-check-circle-fill'},
+                {l:isAr?'مكتملة':'Completed', v:completed.length, c:'var(--blue-light)',i:'bi-star-fill'},
+                {l:isAr?'مرفوضة':'Rejected', v:rejected.length,  c:'var(--red-light)',i:'bi-x-circle-fill'},
               ].map((it,i)=>(
                 <div key={i} className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-1">
@@ -593,14 +665,14 @@ function HomeView({cases,donations,pending,approved,totalAmt,users,doApprove,doR
 // ══════════════════════════════════════════
 // CASE FORM MODAL
 // ══════════════════════════════════════════
-function CaseModal({init, onClose}) {
+function CaseModal({init, onClose, isAr}) {
   const isEdit=!!init?.id;
   const [f,setF]=useState({
     title:init?.title||'',applicantName:init?.applicantName||'',
     location:init?.location||'',category:init?.category||'مالي',
     urgencyLevel:init?.urgencyLevel||'عادي',amountRequired:init?.amountRequired||init?.targetAmount||'',
     description:init?.description||init?.story||'',status:init?.status||'pending',
-    imageUrls:init?.imageUrls||init?.imageUrl?[init.imageUrl]:[]
+    imageUrls:init?.imageUrls||(init?.imageUrl?[init.imageUrl]:[])
   });
   const [saving,setSaving]=useState(false);
   const [files,setFiles]=useState([]);
@@ -627,14 +699,13 @@ function CaseModal({init, onClose}) {
   };
   
   const save=async()=>{
-    if(!f.title.trim()||!f.applicantName.trim()){showToast('error','بيانات ناقصة','عنوان الحالة واسم مقدم الطلب مطلوبان');return}
+    if(!f.title.trim()||!f.applicantName.trim()){showToast('error',isAr?'بيانات ناقصة':'Missing Data',isAr?'عنوان الحالة واسم مقدم الطلب مطلوبان':'Case title and applicant name are required');return}
     setSaving(true);
     try{
       let urls=[...f.imageUrls];
       
       // ─── رفع الصور الجديدة إلى Supabase Storage ───
       if (files.length > 0) {
-        // نحتاج إلى معرف الوثيقة مسبقاً لبناء المسار
         const tmpId = isEdit ? init.id : doc(collection(db,'cases')).id;
         const uploadedUrls = await uploadMultipleToSupabase(files, 'case_documents', tmpId);
         urls = [...urls, ...uploadedUrls];
@@ -656,7 +727,7 @@ function CaseModal({init, onClose}) {
           updatedAt:serverTimestamp()
         };
         await updateDoc(doc(db,'cases',init.id),data);
-        showToast('success','تم التعديل','تم تحديث بيانات الحالة وصورها في Supabase ✓');
+        showToast('success',isAr?'تم التعديل':'Updated',isAr?'تم تحديث بيانات الحالة وصورها ✓':'Case updated successfully ✓');
       } else {
         const newDocRef = doc(collection(db,'cases'));
         const newDocId = newDocRef.id;
@@ -683,39 +754,39 @@ function CaseModal({init, onClose}) {
           updatedAt:serverTimestamp()
         };
         await setDoc(newDocRef, data);
-        showToast('success','تمت الإضافة','تم تسجيل الحالة وصورها في Supabase ✓');
+        showToast('success',isAr?'تمت الإضافة':'Created',isAr?'تم تسجيل الحالة وصورها ✓':'Case created successfully ✓');
       }
       onClose();
-    }catch(e){showToast('error','خطأ في رفع الصور',e.message)}finally{setSaving(false)}
+    }catch(e){showToast('error',isAr?'خطأ في رفع الصور':'Upload Error',e.message)}finally{setSaving(false)}
   };
 
   return (
-    <Modal title={isEdit?'تعديل الحالة':'إضافة حالة جديدة'} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
+    <Modal title={isEdit?(isAr?'تعديل الحالة':'Edit Case'):(isAr?'إضافة حالة جديدة':'Add New Case')} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
       footer={<>
-        <button type="button" className="btn btn-outline" onClick={onClose}>إلغاء</button>
+        <button type="button" className="btn btn-outline" onClick={onClose}>{isAr ? 'إلغاء' : 'Cancel'}</button>
         <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
-          {saving?<><div className="spinner-border spinner-border-sm me-1"></div>جارٍ الحفظ...</>:<><i className="bi bi-check-lg"></i>{isEdit?'حفظ التعديلات':'إضافة الحالة'}</>}
+          {saving?<><div className="spinner-border spinner-border-sm me-1"></div>{isAr ? 'جارٍ الحفظ...' : 'Saving...'}</>:<><i className="bi bi-check-lg"></i>{isEdit?(isAr ? 'حفظ التعديلات' : 'Save Changes'):(isAr ? 'إضافة الحالة' : 'Add Case')}</>}
         </button>
       </>}>
       <div className="row g-3">
-        <div className="col-12"><Field label="عنوان الحالة *"><input className="form-input" value={f.title} onChange={up('title')} placeholder="عنوان وصفي للحالة" /></Field></div>
-        <div className="col-md-6"><Field label="اسم مقدم الطلب *"><input className="form-input" value={f.applicantName} onChange={up('applicantName')} placeholder="الاسم الكامل" /></Field></div>
-        <div className="col-md-6"><Field label="الموقع"><input className="form-input" value={f.location} onChange={up('location')} placeholder="المدينة / المنطقة" /></Field></div>
-        <div className="col-md-4"><Field label="الفئة"><select className="form-input" value={f.category} onChange={up('category')}><option>مالي</option><option>عيني</option><option>طبي</option><option>صحة</option></select></Field></div>
-        <div className="col-md-4"><Field label="درجة الإلحاح"><select className="form-input" value={f.urgencyLevel} onChange={up('urgencyLevel')}><option>عادي</option><option>متوسط</option><option>عاجل</option></select></Field></div>
-        <div className="col-md-4"><Field label="المبلغ المطلوب"><input className="form-input" type="number" value={f.amountRequired} onChange={up('amountRequired')} placeholder="0" /></Field></div>
-        {isEdit&&<div className="col-md-6"><Field label="الحالة"><select className="form-input" value={f.status} onChange={up('status')}><option value="pending">معلق</option><option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="completed">مكتمل</option></select></Field></div>}
+        <div className="col-12"><Field label={isAr ? "عنوان الحالة *" : "Case Title *"}><input className="form-input" value={f.title} onChange={up('title')} placeholder={isAr ? "عنوان وصفي للحالة" : "Descriptive case title"} /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "اسم مقدم الطلب *" : "Applicant Name *"}><input className="form-input" value={f.applicantName} onChange={up('applicantName')} placeholder={isAr ? "الاسم الكامل" : "Full Name"} /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "الموقع" : "Location"}><input className="form-input" value={f.location} onChange={up('location')} placeholder={isAr ? "المدينة / المنطقة" : "City / Region"} /></Field></div>
+        <div className="col-md-4"><Field label={isAr ? "الفئة" : "Category"}><select className="form-input" value={f.category} onChange={up('category')}><option value="مالي">{isAr ? 'مالي' : 'Financial'}</option><option value="عيني">{isAr ? 'عيني' : 'In-kind'}</option><option value="طبي">{isAr ? 'طبي' : 'Medical'}</option><option value="صحة">{isAr ? 'صحة' : 'Healthcare'}</option></select></Field></div>
+        <div className="col-md-4"><Field label={isAr ? "درجة الإلحاح" : "Urgency Level"}><select className="form-input" value={f.urgencyLevel} onChange={up('urgencyLevel')}><option value="عادي">{isAr ? 'عادي' : 'Normal'}</option><option value="متوسط">{isAr ? 'متوسط' : 'Medium'}</option><option value="عاجل">{isAr ? 'عاجل' : 'Urgent'}</option></select></Field></div>
+        <div className="col-md-4"><Field label={isAr ? "المبلغ المطلوب" : "Target Amount"}><input className="form-input" type="number" value={f.amountRequired} onChange={up('amountRequired')} placeholder="0" /></Field></div>
+        {isEdit&&<div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option value="pending">{isAr ? 'معلق' : 'Pending'}</option><option value="approved">{isAr ? 'معتمد' : 'Approved'}</option><option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option><option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option></select></Field></div>}
         
         <div className="col-12">
-          <Field label="صور الحالة (يمكن اختيار عدة صور)">
+          <Field label={isAr ? "صور الحالة (يمكن اختيار عدة صور)" : "Case Images (Multiple files allowed)"}>
             <input className="form-input" type="file" accept="image/*" multiple onChange={upFile} />
-            <small className="text-muted d-block mt-1">💡 يمكنك تحميل عدة صور لتأكيد الحالة</small>
+            <small className="text-muted d-block mt-1">{isAr ? '💡 يمكنك تحميل عدة صور لتأكيد الحالة' : '💡 You can upload multiple images to support the case'}</small>
           </Field>
         </div>
         
         {(f.imageUrls.length > 0 || previews.length > 0) && (
           <div className="col-12">
-            <Field label={`الصور المرفقة (${f.imageUrls.length + previews.length})`}>
+            <Field label={isAr ? `الصور المرفقة (${f.imageUrls.length + previews.length})` : `Attached Images (${f.imageUrls.length + previews.length})`}>
               <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(100px, 1fr))', gap:'10px'}}>
                 {f.imageUrls.map((url, idx) => (
                   <div key={`old-${idx}`} style={{position:'relative', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)'}}>
@@ -738,7 +809,7 @@ function CaseModal({init, onClose}) {
           </div>
         )}
         
-        <div className="col-12"><Field label="وصف الحالة"><textarea className="form-input" rows={4} value={f.description} onChange={up('description')} placeholder="تفاصيل الحالة وقصة المستفيد..." style={{resize:'vertical'}} /></Field></div>
+        <div className="col-12"><Field label={isAr ? "وصف الحالة" : "Case Description & Story"}><textarea className="form-input" rows={4} value={f.description} onChange={up('description')} placeholder={isAr ? "تفاصيل الحالة وقصة المستفيد..." : "Case details and beneficiary story..."} style={{resize:'vertical'}} /></Field></div>
       </div>
     </Modal>
   );
@@ -747,23 +818,23 @@ function CaseModal({init, onClose}) {
 // ══════════════════════════════════════════
 // PENDING VIEW
 // ══════════════════════════════════════════
-function PendingView({cases, doApprove, doReject, doDelCase}) {
+function PendingView({cases, doApprove, doReject, doDelCase, isAr}) {
   const [modal,setModal] = useState(null);
   return (
     <div>
-      {modal&&<CaseModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} />}
+      {modal&&<CaseModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} isAr={isAr} />}
       <div className="d-flex align-items-center justify-content-between mb-4">
         <div className="d-flex align-items-center gap-3">
           <div className="stat-icon" style={{background:'rgba(249,168,37,0.15)',color:'var(--gold)',width:40,height:40,borderRadius:12,fontSize:'1.1rem'}}><i className="bi bi-hourglass-split"></i></div>
           <div>
-            <div className="bold" style={{fontSize:'.87rem'}}>الحالات المعلقة</div>
-            <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>{cases.length} حالة تنتظر المراجعة</div>
+            <div className="bold" style={{fontSize:'.87rem'}}>{isAr ? 'الحالات المعلقة' : 'Pending Cases'}</div>
+            <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>{isAr ? `${cases.length} حالة تنتظر المراجعة` : `${cases.length} cases awaiting review`}</div>
           </div>
         </div>
-        <button className="btn btn-primary" onClick={()=>setModal('new')}><i className="bi bi-plus-lg"></i>إضافة حالة</button>
+        <button className="btn btn-primary" onClick={()=>setModal('new')}><i className="bi bi-plus-lg"></i>{isAr ? 'إضافة حالة' : 'Add Case'}</button>
       </div>
       {cases.length===0
-        ?<div className="card"><Empty icon="bi-check-all" title="لا توجد حالات معلقة" sub="تمت مراجعة جميع الحالات!" /></div>
+        ?<div className="card"><Empty icon="bi-check-all" title={isAr ? "لا توجد حالات معلقة" : "No pending cases"} sub={isAr ? "تمت مراجعة جميع الحالات!" : "All cases reviewed!"} /></div>
         :<div className="cases-grid">
           {cases.map(c=>(
             <div className={`case-card ${c.status}`} key={c.id}>
@@ -772,12 +843,12 @@ function PendingView({cases, doApprove, doReject, doDelCase}) {
                   <Av name={c.applicantName} size={32} />
                   <div>
                     <div className="bold" style={{fontSize:'.78rem'}}>{c.applicantName}</div>
-                    <div style={{fontSize:'.61rem',color:'var(--text-secondary)'}}>{c.location||c.city||'غير محدد'}</div>
+                    <div style={{fontSize:'.61rem',color:'var(--text-secondary)'}}>{c.location||c.city||(isAr ? 'غير محدد' : 'N/A')}</div>
                   </div>
                 </div>
                 <span className={catBadge(c.category)}>{c.category}</span>
               </div>
-              <h3 className="case-title">{c.title||'بدون عنوان'}</h3>
+              <h3 className="case-title">{c.title||(isAr ? 'بدون عنوان' : 'Untitled')}</h3>
               <div className="case-story">{c.description||c.story}</div>
               {(c.imageUrls && c.imageUrls.length > 0) && (
                 <div className="mb-3">
@@ -790,7 +861,7 @@ function PendingView({cases, doApprove, doReject, doDelCase}) {
                       ))}
                       {c.imageUrls.length > 4 && (
                         <div style={{gridColumn:'1 / -1', padding:'8px', background:'rgba(249,168,37,0.1)', borderRadius:'var(--radius-sm)', textAlign:'center', fontSize:'.75rem', color:'var(--gold)'}}>
-                          +{c.imageUrls.length - 4} صور إضافية
+                          +{c.imageUrls.length - 4} {isAr ? 'صور إضافية' : 'more images'}
                         </div>
                       )}
                     </div>
@@ -802,16 +873,16 @@ function PendingView({cases, doApprove, doReject, doDelCase}) {
                   {String(c.imageUrl||c.documentUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
                     <img src={c.imageUrl||c.documentUrl} alt="المرفق" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
                   ) : (
-                    <a href={c.imageUrl||c.documentUrl} target="_blank" className="btn btn-outline btn-sm w-100 justify-content-center" style={{padding:'6px'}}><i className="bi bi-file-earmark-text"></i> المستند المرفق</a>
+                    <a href={c.imageUrl||c.documentUrl} target="_blank" className="btn btn-outline btn-sm w-100 justify-content-center" style={{padding:'6px'}}><i className="bi bi-file-earmark-text"></i> {isAr ? 'المستند المرفق' : 'Attached Document'}</a>
                   )}
                 </div>
               )}
-              {c.amountRequired&&<div className="d-flex align-items-center gap-2 p-2 rounded-3 mb-3" style={{background:'rgba(249,168,37,0.06)',border:'1px solid rgba(249,168,37,0.12)'}}><i className="bi bi-cash-coin" style={{color:'var(--gold)'}}></i><span style={{fontSize:'.73rem',fontWeight:700,color:'var(--gold)'}}>{Number(c.amountRequired).toLocaleString('ar')} ج.س</span></div>}
+              {c.amountRequired&&<div className="d-flex align-items-center gap-2 p-2 rounded-3 mb-3" style={{background:'rgba(249,168,37,0.06)',border:'1px solid rgba(249,168,37,0.12)'}}><i className="bi bi-cash-coin" style={{color:'var(--gold)'}}></i><span style={{fontSize:'.73rem',fontWeight:700,color:'var(--gold)'}}>{Number(c.amountRequired).toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</span></div>}
               <div className="case-actions">
-                <button className="btn btn-approve btn-sm flex-fill justify-content-center" onClick={()=>doApprove(c.id,c.title)}><i className="bi bi-check-lg"></i>موافقة</button>
-                <button className="btn btn-reject btn-sm flex-fill justify-content-center" onClick={()=>doReject(c.id,c.title)}><i className="bi bi-x-lg"></i>رفض</button>
-                <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(c)} title="تعديل"><i className="bi bi-pencil"></i></button>
-                <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelCase(c.id,c.title)} title="حذف"><i className="bi bi-trash3"></i></button>
+                <button className="btn btn-approve btn-sm flex-fill justify-content-center" onClick={()=>doApprove(c.id,c.title)}><i className="bi bi-check-lg"></i>{isAr ? 'موافقة' : 'Approve'}</button>
+                <button className="btn btn-reject btn-sm flex-fill justify-content-center" onClick={()=>doReject(c.id,c.title)}><i className="bi bi-x-lg"></i>{isAr ? 'رفض' : 'Reject'}</button>
+                <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(c)} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
+                <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelCase(c.id,c.title)} title={isAr ? "حذف" : "Delete"}><i className="bi bi-trash3"></i></button>
               </div>
             </div>
           ))}
@@ -824,7 +895,7 @@ function PendingView({cases, doApprove, doReject, doDelCase}) {
 // ══════════════════════════════════════════
 // CASES VIEW
 // ══════════════════════════════════════════
-function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, doUpdateRaisedAmount, setAssignModal, openNewCase, setOpenNewCase}) {
+function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, doUpdateRaisedAmount, setAssignModal, openNewCase, setOpenNewCase, isAr}) {
   const [q,setQ]=useState(''); const [st,setSt]=useState('all'); const [cat,setCat]=useState('all');
   const [modal,setModal]=useState(null); const [detail,setDetail]=useState(null);
   useEffect(() => {
@@ -842,21 +913,28 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
     if(!volId) return null;
     return users.find(u => u.id === volId || u.uid === volId);
   };
+  const STATUS_LABELS = {
+    pending: isAr ? 'معلق' : 'Pending',
+    approved: isAr ? 'معتمد' : 'Approved',
+    rejected: isAr ? 'مرفوض' : 'Rejected',
+    completed: isAr ? 'مكتمل' : 'Completed'
+  };
+
   return (
     <div>
-      {modal&&<CaseModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} />}
+      {modal&&<CaseModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} isAr={isAr} />}
       {detail&&(
-        <Modal title="تفاصيل الحالة" icon="bi-journal-medical" onClose={()=>setDetail(null)}
-          footer={<><button className="btn btn-outline" onClick={()=>setDetail(null)}>إغلاق</button>{detail.status==='pending'&&<><button className="btn btn-reject" onClick={()=>{doReject(detail.id,detail.title);setDetail(null)}}><i className="bi bi-x-lg"></i>رفض</button><button className="btn btn-approve" onClick={()=>{doApprove(detail.id,detail.title);setDetail(null)}}><i className="bi bi-check-lg"></i>موافقة</button></>}</>}>
+        <Modal title={isAr ? "تفاصيل الحالة" : "Case Details"} icon="bi-journal-medical" onClose={()=>setDetail(null)}
+          footer={<><button className="btn btn-outline" onClick={()=>setDetail(null)}>{isAr ? 'إغلاق' : 'Close'}</button>{detail.status==='pending'&&<><button className="btn btn-reject" onClick={()=>{doReject(detail.id,detail.title);setDetail(null)}}><i className="bi bi-x-lg"></i>{isAr ? 'رفض' : 'Reject'}</button><button className="btn btn-approve" onClick={()=>{doApprove(detail.id,detail.title);setDetail(null)}}><i className="bi bi-check-lg"></i>{isAr ? 'موافقة' : 'Approve'}</button></>}</>}>
           <div className="row g-3">
-            <div className="col-md-6"><div className="modal-label">مقدم الطلب</div><div className="bold">{detail.applicantName||'—'}</div></div>
-            <div className="col-md-6"><div className="modal-label">الموقع</div><div>{detail.location||detail.city||'—'}</div></div>
-            <div className="col-md-6"><div className="modal-label">الفئة</div><span className={catBadge(detail.category)}>{detail.category}</span></div>
-            <div className="col-md-6"><div className="modal-label">الحالة</div><span className={(STATUS[detail.status]||STATUS.pending).c}>{(STATUS[detail.status]||STATUS.pending).l}</span></div>
-            <div className="col-md-6"><div className="modal-label">المبلغ المطلوب</div><div className="bold" style={{color:'var(--gold)'}}>{Number(detail.targetAmount||detail.amountRequired||0).toLocaleString('ar')} ج.س</div></div>
-            <div className="col-md-6"><div className="modal-label">تم جمعه</div><div className="bold" style={{color:'var(--primary-light)'}}>{Number(detail.raisedAmount||detail.amountRaised||0).toLocaleString('ar')} ج.س</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'مقدم الطلب' : 'Applicant'}</div><div className="bold">{detail.applicantName||'—'}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'الموقع' : 'Location'}</div><div>{detail.location||detail.city||'—'}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'الفئة' : 'Category'}</div><span className={catBadge(detail.category)}>{detail.category}</span></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'الحالة' : 'Status'}</div><span className={(STATUS[detail.status]||STATUS.pending).c}>{STATUS_LABELS[detail.status]||(STATUS[detail.status]||STATUS.pending).l}</span></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'المبلغ المطلوب' : 'Target Amount'}</div><div className="bold" style={{color:'var(--gold)'}}>{Number(detail.targetAmount||detail.amountRequired||0).toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'تم جمعه' : 'Raised Amount'}</div><div className="bold" style={{color:'var(--primary-light)'}}>{Number(detail.raisedAmount||detail.amountRaised||0).toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</div></div>
             <div className="col-12">
-              <div className="modal-label">التقدم ({pct(detail)}%)</div>
+              <div className="modal-label">{isAr ? `التقدم (${pct(detail)}%)` : `Progress (${pct(detail)}%)`}</div>
               <div className="progress-bar" style={{height:12,marginTop:6,borderRadius:10,boxShadow:'inset 0 2px 4px rgba(0,0,0,0.2)'}}>
                 <div className="progress-fill" style={{width:`${Math.min(pct(detail), 100)}%`, background:'linear-gradient(90deg, #43A047, #66BB6A)', position:'relative', overflow:'hidden'}}>
                   <div style={{position:'absolute', top:0, left:0, bottom:0, right:0, background:'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)', transform:'skewX(-20deg)', animation:'shimmer 2s infinite'}} />
@@ -864,19 +942,19 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
               </div>
             </div>
             <div className="col-12">
-              <div className="modal-label">المتطوع المعين</div>
+              <div className="modal-label">{isAr ? 'المتطوع المعين' : 'Assigned Volunteer'}</div>
               <div className="form-input" style={{background:'rgba(255,255,255,0.03)'}}>
                 {getAssignedVol(detail.assignedVolunteerId) ? (
                   <span>
                     <i className="bi bi-person-check-fill me-1" style={{color:'var(--primary-light)'}}></i>
                     {getAssignedVol(detail.assignedVolunteerId).name} ({getAssignedVol(detail.assignedVolunteerId).email})
                   </span>
-                ) : 'لم يتم تعيين متطوع بعد'}
+                ) : (isAr ? 'لم يتم تعيين متطوع بعد' : 'No volunteer assigned yet')}
               </div>
             </div>
             {(detail.volunteerReport || detail.volunteerNotes) && (
               <div className="col-12">
-                <div className="modal-label">تقرير الملاحظات من المتطوع</div>
+                <div className="modal-label">{isAr ? 'تقرير الملاحظات من المتطوع' : 'Volunteer Notes Report'}</div>
                 <div className="text-sm p-3 rounded" style={{background:'rgba(102,187,106,0.08)', border:'1px solid rgba(102,187,106,0.2)', color:'#66BB6A', lineHeight:1.6}}>
                   <i className="bi bi-chat-left-text-fill me-2"></i>
                   {detail.volunteerNotes || detail.volunteerReport}
@@ -885,7 +963,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
             )}
             {detail.proofUrl && (
               <div className="col-12">
-                <div className="modal-label">صورة الإثبات المرفقة من المتطوع</div>
+                <div className="modal-label">{isAr ? 'صورة الإثبات المرفقة من المتطوع' : 'Volunteer Proof Image'}</div>
                 <div style={{marginTop:8}}>
                   <img src={detail.proofUrl} alt="إثبات التسليم" style={{maxWidth:'100%', maxHeight:'300px', objectFit:'cover', borderRadius:12, border:'2px solid #66BB6A', padding:2, cursor:'pointer', boxShadow:'0 4px 12px rgba(102,187,106,0.2)'}} onClick={() => window.open(detail.proofUrl, '_blank')} />
                 </div>
@@ -893,7 +971,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
             )}
             {(detail.imageUrls && detail.imageUrls.length > 0) && (
               <div className="col-12">
-                <div className="modal-label">الصور المرفقة ({detail.imageUrls.length})</div>
+                <div className="modal-label">{isAr ? `الصور المرفقة (${detail.imageUrls.length})` : `Attached Images (${detail.imageUrls.length})`}</div>
                 <div style={{marginTop:8}}>
                   {detail.imageUrls.length === 1 ? (
                     <img src={detail.imageUrls[0]} alt="صورة الحالة" style={{maxWidth:'100%', borderRadius:12, border:'1px solid var(--border)'}} />
@@ -909,17 +987,17 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
             )}
             {(!detail.imageUrls || detail.imageUrls.length === 0) && (detail.imageUrl||detail.documentUrl) && (
               <div className="col-12">
-                <div className="modal-label">المرفقات</div>
+                <div className="modal-label">{isAr ? 'المرفقات' : 'Attachments'}</div>
                 <div style={{marginTop:8}}>
                   {String(detail.imageUrl||detail.documentUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
                     <img src={detail.imageUrl||detail.documentUrl} alt="صورة الحالة" style={{maxWidth:'100%', borderRadius:12, border:'1px solid var(--border)'}} />
                   ) : (
-                    <a href={detail.imageUrl||detail.documentUrl} target="_blank" className="btn btn-outline" style={{display:'inline-flex', width:'auto'}}><i className="bi bi-file-earmark-text"></i>عرض المستند</a>
+                    <a href={detail.imageUrl||detail.documentUrl} target="_blank" className="btn btn-outline" style={{display:'inline-flex', width:'auto'}}><i className="bi bi-file-earmark-text"></i>{isAr ? 'عرض المستند' : 'View Document'}</a>
                   )}
                 </div>
               </div>
             )}
-            <div className="col-12"><div className="modal-label">التفاصيل وقصة المستفيد</div><div style={{fontSize:'.82rem',lineHeight:1.7,marginTop:4,padding:12,borderRadius:9,background:'var(--bg-input)',border:'1px solid var(--border)'}}>{detail.description||detail.story||'—'}</div></div>
+            <div className="col-12"><div className="modal-label">{isAr ? 'التفاصيل وقصة المستفيد' : 'Details & Story'}</div><div style={{fontSize:'.82rem',lineHeight:1.7,marginTop:4,padding:12,borderRadius:9,background:'var(--bg-input)',border:'1px solid var(--border)'}}>{detail.description||detail.story||'—'}</div></div>
           </div>
         </Modal>
       )}
@@ -927,14 +1005,20 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
         <div className="d-flex gap-2 flex-wrap flex-fill">
           <div className="search-wrap flex-fill" style={{maxWidth:280}}>
             <i className="bi bi-search search-icon"></i>
-            <input className="search-input" type="text" placeholder="بحث..." value={q} onChange={e=>setQ(e.target.value)} />
+            <input className="search-input" type="text" placeholder={isAr ? "بحث..." : "Search..."} value={q} onChange={e=>setQ(e.target.value)} />
           </div>
           <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={st} onChange={e=>setSt(e.target.value)}>
-            <option value="all">كل الحالات</option><option value="pending">معلق</option>
-            <option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="completed">مكتمل</option>
+            <option value="all">{isAr ? 'كل الحالات' : 'All Statuses'}</option>
+            <option value="pending">{isAr ? 'معلق' : 'Pending'}</option>
+            <option value="approved">{isAr ? 'معتمد' : 'Approved'}</option>
+            <option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option>
+            <option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option>
           </select>
           <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={cat} onChange={e=>setCat(e.target.value)}>
-            <option value="all">كل الفئات</option><option value="مالي">مالي</option><option value="عيني">عيني</option><option value="طبي">طبي</option>
+            <option value="all">{isAr ? 'كل الفئات' : 'All Categories'}</option>
+            <option value="مالي">{isAr ? 'مالي' : 'Financial'}</option>
+            <option value="عيني">{isAr ? 'عيني' : 'In-kind'}</option>
+            <option value="طبي">{isAr ? 'طبي' : 'Medical'}</option>
           </select>
         </div>
         <button
@@ -943,10 +1027,10 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
           style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
           onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
           onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
-        ><i className="bi bi-plus-circle-fill"></i>إضافة حالة</button>
+        ><i className="bi bi-plus-circle-fill"></i>{isAr ? 'إضافة حالة' : 'Add Case'}</button>
       </div>
       {filt.length===0
-        ?<div className="card"><Empty icon="bi-inbox" title="لا توجد نتائج" sub="جرّب تعديل معايير البحث" /></div>
+        ?<div className="card"><Empty icon="bi-inbox" title={isAr ? "لا توجد نتائج" : "No results found"} sub={isAr ? "جرّب تعديل معايير البحث" : "Try adjusting your search filters"} /></div>
         :<div className="cases-grid">
           {filt.map(c=>{
             const sc=STATUS[c.status]||STATUS.pending;
@@ -956,7 +1040,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
                 <div className="case-card-header">
                   <div className="d-flex align-items-center gap-2">
                     <div style={{width:7,height:7,borderRadius:'50%',background:sc.dot,boxShadow:`0 0 6px ${sc.dot}`}}></div>
-                    <span className={sc.c}>{sc.l}</span>
+                    <span className={sc.c}>{STATUS_LABELS[c.status]||sc.l}</span>
                   </div>
                   <span className={catBadge(c.category)}>{c.category}</span>
                 </div>
@@ -969,7 +1053,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
                 {assignedVol && (
                   <div className="mb-2 text-xs" style={{color:'var(--primary-light)'}}>
                     <i className="bi bi-person-check-fill me-1"></i>
-                    المتطوع المعين: {assignedVol.name}
+                    {isAr ? 'المتطوع المعين:' : 'Assigned Volunteer:'} {assignedVol.name}
                   </div>
                 )}
                 {(c.imageUrls && c.imageUrls.length > 0) && !c.proofUrl && (
@@ -983,7 +1067,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
                         ))}
                         {c.imageUrls.length > 4 && (
                           <div style={{gridColumn:'1 / -1', padding:'8px', background:'rgba(249,168,37,0.1)', borderRadius:'var(--radius-sm)', textAlign:'center', fontSize:'.75rem', color:'var(--gold)'}}>
-                            +{c.imageUrls.length - 4} صور إضافية
+                            +{c.imageUrls.length - 4} {isAr ? 'صور إضافية' : 'more images'}
                           </div>
                         )}
                       </div>
@@ -995,13 +1079,13 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
                     {String(c.imageUrl||c.documentUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
                       <img src={c.imageUrl||c.documentUrl} alt="صورة المرفق" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)'}} />
                     ) : (
-                      <a href={c.imageUrl||c.documentUrl} target="_blank" className="btn btn-outline btn-sm w-100 justify-content-center" style={{padding:'6px'}}><i className="bi bi-file-earmark-text"></i> عرض المستند المرفق</a>
+                      <a href={c.imageUrl||c.documentUrl} target="_blank" className="btn btn-outline btn-sm w-100 justify-content-center" style={{padding:'6px'}}><i className="bi bi-file-earmark-text"></i> {isAr ? 'عرض المستند المرفق' : 'View Attachment'}</a>
                     )}
                   </div>
                 )}
                 {c.proofUrl && (
                   <div className="mb-3" style={{position:'relative'}}>
-                    <div style={{position:'absolute', top:8, right:8, background:'rgba(102,187,106,0.9)', color:'#fff', padding:'2px 8px', borderRadius:20, fontSize:11, fontWeight:700, zIndex:2}}><i className="bi bi-check2-circle me-1"></i>إثبات التسليم</div>
+                    <div style={{position:'absolute', top:8, right:8, background:'rgba(102,187,106,0.9)', color:'#fff', padding:'2px 8px', borderRadius:20, fontSize:11, fontWeight:700, zIndex:2}}><i className="bi bi-check2-circle me-1"></i>{isAr ? 'إثبات التسليم' : 'Delivery Proof'}</div>
                     <img src={c.proofUrl} alt="إثبات التسليم" style={{width:'100%', height:140, objectFit:'cover', borderRadius:'var(--radius-sm)', border:'2px solid #66BB6A', cursor:'pointer'}} onClick={()=>window.open(c.proofUrl, '_blank')} />
                   </div>
                 )}
@@ -1009,23 +1093,23 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
                   <div className="case-progress-section">
                     <div className="case-progress-label">
                       <span>
-                        تم جمعه: <b style={{color:'var(--primary-light)'}}>{Number(c.raisedAmount||c.amountRaised||0).toLocaleString('ar')} ج.س</b>
-                        <button className="btn btn-ghost btn-icon p-0 ms-1" style={{minWidth:'auto',lineHeight:1}} onClick={()=>doUpdateRaisedAmount(c.id,c.title,c.raisedAmount||c.amountRaised||0)} title="تعديل المبلغ المجمع">
+                        {isAr ? 'تم جمعه:' : 'Raised:'} <b style={{color:'var(--primary-light)'}}>{Number(c.raisedAmount||c.amountRaised||0).toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</b>
+                        <button className="btn btn-ghost btn-icon p-0 ms-1" style={{minWidth:'auto',lineHeight:1}} onClick={()=>doUpdateRaisedAmount(c.id,c.title,c.raisedAmount||c.amountRaised||0)} title={isAr ? "تعديل المبلغ المجمع" : "Update Raised Amount"}>
                           <i className="bi bi-pencil-square" style={{color:'var(--primary-light)',fontSize:'0.8rem'}}></i>
                         </button>
                       </span>
-                      <span>الهدف: <b>{Number(c.targetAmount||c.amountRequired||0).toLocaleString('ar')} ج.س</b></span>
+                      <span>{isAr ? 'الهدف:' : 'Target:'} <b>{Number(c.targetAmount||c.amountRequired||0).toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</b></span>
                     </div>
                     <div className="progress-bar"><div className="progress-fill" style={{width:`${Math.min(pct(c), 100)}%`}}></div></div>
                   </div>
                 </>}
                 <div className="case-actions">
-                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setDetail(c)} title="تفاصيل"><i className="bi bi-eye"></i></button>
-                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(c)} title="تعديل"><i className="bi bi-pencil"></i></button>
-                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setAssignModal(c)} title="تعيين متطوع"><i className="bi bi-person-check"></i></button>
-                  {c.status==='pending'&&<><button className="btn btn-approve btn-icon btn-sm" onClick={()=>doApprove(c.id,c.title)} title="موافقة"><i className="bi bi-check-lg"></i></button><button className="btn btn-reject btn-icon btn-sm" onClick={()=>doReject(c.id,c.title)} title="رفض"><i className="bi bi-x-lg"></i></button></>}
-                  {c.status==='approved'&&<button className="btn btn-primary btn-icon btn-sm" onClick={()=>doComplete(c.id,c.title)} title="إتمام"><i className="bi bi-star"></i></button>}
-                  <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelCase(c.id,c.title)} title="حذف"><i className="bi bi-trash3"></i></button>
+                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setDetail(c)} title={isAr ? "تفاصيل" : "Details"}><i className="bi bi-eye"></i></button>
+                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(c)} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
+                  <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setAssignModal(c)} title={isAr ? "تعيين متطوع" : "Assign Volunteer"}><i className="bi bi-person-check"></i></button>
+                  {c.status==='pending'&&<><button className="btn btn-approve btn-icon btn-sm" onClick={()=>doApprove(c.id,c.title)} title={isAr ? "موافقة" : "Approve"}><i className="bi bi-check-lg"></i></button><button className="btn btn-reject btn-icon btn-sm" onClick={()=>doReject(c.id,c.title)} title={isAr ? "رفض" : "Reject"}><i className="bi bi-x-lg"></i></button></>}
+                  {c.status==='approved'&&<button className="btn btn-primary btn-icon btn-sm" onClick={()=>doComplete(c.id,c.title)} title={isAr ? "إتمام" : "Complete"}><i className="bi bi-star"></i></button>}
+                  <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelCase(c.id,c.title)} title={isAr ? "حذف" : "Delete"}><i className="bi bi-trash3"></i></button>
                 </div>
               </div>
             )})}
@@ -1038,7 +1122,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
 // ══════════════════════════════════════════
 // DONATION FORM MODAL
 // ══════════════════════════════════════════
-function DonationModal({init, cases, onClose}) {
+function DonationModal({init, cases, onClose, isAr}) {
   const isEdit=!!init?.id;
   const [f,setF]=useState({
     donorName:init?.donorName||'', caseTitle:init?.caseTitle||'', caseId:init?.caseId||'',
@@ -1051,7 +1135,7 @@ function DonationModal({init, cases, onClose}) {
   const handleCaseChange = (e) => {
     const selectedId = e.target.value;
     if (selectedId === '') {
-      setF(p => ({...p, caseId: '', caseTitle: 'تبرع عام'}));
+      setF(p => ({...p, caseId: '', caseTitle: isAr ? 'تبرع عام' : 'General Donation'}));
     } else {
       const selectedCase = cases.find(c => c.id === selectedId);
       setF(p => ({...p, caseId: selectedId, caseTitle: selectedCase ? selectedCase.title : ''}));
@@ -1065,35 +1149,35 @@ function DonationModal({init, cases, onClose}) {
   }
 
   const save=async()=>{
-    if(!f.amountOrItem.trim()){showToast('error','بيانات ناقصة','المبلغ أو العطاء مطلوب');return}
+    if(!f.amountOrItem.trim()){showToast('error',isAr?'بيانات ناقصة':'Missing Data',isAr?'المبلغ أو العطاء مطلوب':'Amount or item contribution is required');return}
     setSaving(true);
     try{
       const data={...f,updatedAt:serverTimestamp()};
-      if(isEdit){await updateDoc(doc(db,'donations',init.id),data);showToast('success','تم التعديل','تم تحديث التبرع')}
-      else{await addDoc(collection(db,'donations'),{...data,createdAt:serverTimestamp()});showToast('success','تمت الإضافة','تم تسجيل التبرع')}
+      if(isEdit){await updateDoc(doc(db,'donations',init.id),data);showToast('success',isAr?'تم التعديل':'Updated',isAr?'تم تحديث التبرع':'Donation updated successfully')}
+      else{await addDoc(collection(db,'donations'),{...data,createdAt:serverTimestamp()});showToast('success',isAr?'تمت الإضافة':'Recorded',isAr?'تم تسجيل التبرع':'Donation recorded successfully')}
       onClose();
-    }catch(e){showToast('error','خطأ',e.message)}finally{setSaving(false)}
+    }catch(e){showToast('error',isAr?'خطأ':'Error',e.message)}finally{setSaving(false)}
   };
   return (
-    <Modal title={isEdit?'تعديل التبرع':'تسجيل تبرع جديد'} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
-      footer={<><button className="btn btn-outline" onClick={onClose}>إلغاء</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>جارٍ الحفظ...</>:<><i className="bi bi-check-lg"></i>{isEdit?'حفظ التعديلات':'تسجيل التبرع'}</>}</button></>}>
+    <Modal title={isEdit?(isAr?'تعديل التبرع':'Edit Donation'):(isAr?'تسجيل تبرع جديد':'Record New Donation')} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
+      footer={<><button className="btn btn-outline" onClick={onClose}>{isAr ? 'إلغاء' : 'Cancel'}</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>{isAr ? 'جارٍ الحفظ...' : 'Saving...'}</>:<><i className="bi bi-check-lg"></i>{isEdit?(isAr ? 'حفظ التعديلات' : 'Save Changes'):(isAr ? 'تسجيل التبرع' : 'Record Donation')}</>}</button></>}>
       <div className="row g-3">
-        <div className="col-md-6"><Field label="اسم المتبرع"><input className="form-input" value={f.donorName} onChange={up('donorName')} placeholder="الاسم الكامل أو مجهول" /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "اسم المتبرع" : "Donor Name"}><input className="form-input" value={f.donorName} onChange={up('donorName')} placeholder={isAr ? "الاسم الكامل أو مجهول" : "Full Name or Anonymous"} /></Field></div>
         <div className="col-md-6">
-          <Field label="الحالة المستفيدة">
+          <Field label={isAr ? "الحالة المستفيدة" : "Beneficiary Case"}>
             <select className="form-input" value={f.caseId} onChange={handleCaseChange}>
-              <option value="">تبرع عام</option>
+              <option value="">{isAr ? 'تبرع عام' : 'General Donation'}</option>
               {approvedCases.map(c => (
                 <option key={c.id} value={c.id}>{c.title}</option>
               ))}
             </select>
           </Field>
         </div>
-        <div className="col-md-6"><Field label="المبلغ / العطاء *"><input className="form-input" value={f.amountOrItem} onChange={up('amountOrItem')} placeholder="مثال: 500 ج.س أو ملابس" /></Field></div>
-        <div className="col-md-6"><Field label="طريقة الدفع"><select className="form-input" value={f.paymentMethod} onChange={up('paymentMethod')}><option>تحويل بنكي</option><option>نقداً</option><option>بطاقة ائتمانية</option><option>عيني</option></select></Field></div>
-        <div className="col-md-6"><Field label="الفئة"><select className="form-input" value={f.category} onChange={up('category')}><option>مالي</option><option>عيني</option><option>طبي</option></select></Field></div>
-        <div className="col-md-6"><Field label="الحالة"><select className="form-input" value={f.status} onChange={up('status')}><option>قيد الجمع</option><option>تم الاستلام</option><option>تم التوزيع</option></select></Field></div>
-        <div className="col-12"><Field label="ملاحظات"><textarea className="form-input" rows={3} value={f.notes} onChange={up('notes')} placeholder="أي ملاحظات إضافية..." style={{resize:'vertical'}} /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "المبلغ / العطاء *" : "Amount / Item *"}><input className="form-input" value={f.amountOrItem} onChange={up('amountOrItem')} placeholder={isAr ? "مثال: 500 ج.س أو ملابس" : "e.g. 500 SDG or Clothes"} /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "طريقة الدفع" : "Payment Method"}><select className="form-input" value={f.paymentMethod} onChange={up('paymentMethod')}><option>{isAr ? 'تحويل بنكي' : 'Bank Transfer'}</option><option>{isAr ? 'نقداً' : 'Cash'}</option><option>{isAr ? 'بطاقة ائتمانية' : 'Credit Card'}</option><option>{isAr ? 'عيني' : 'In-kind'}</option></select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "الفئة" : "Category"}><select className="form-input" value={f.category} onChange={up('category')}><option>{isAr ? 'مالي' : 'Financial'}</option><option>{isAr ? 'عيني' : 'In-kind'}</option><option>{isAr ? 'طبي' : 'Medical'}</option></select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option>{isAr ? 'قيد الجمع' : 'Collecting'}</option><option>{isAr ? 'تم الاستلام' : 'Received'}</option><option>{isAr ? 'تم التوزيع' : 'Distributed'}</option></select></Field></div>
+        <div className="col-12"><Field label={isAr ? "ملاحظات" : "Notes"}><textarea className="form-input" rows={3} value={f.notes} onChange={up('notes')} placeholder={isAr ? "أي ملاحظات إضافية..." : "Any additional notes..."} style={{resize:'vertical'}} /></Field></div>
       </div>
     </Modal>
   );
@@ -1102,7 +1186,7 @@ function DonationModal({init, cases, onClose}) {
 // ══════════════════════════════════════════
 // DONATIONS VIEW
 // ══════════════════════════════════════════
-function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmReceived, doConfirmDistributed}) {
+function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmReceived, doConfirmDistributed, isAr}) {
   const [q,setQ]=useState(''); const [st,setSt]=useState('all');
   const [modal,setModal]=useState(null);
 
@@ -1120,16 +1204,16 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
   const pending  = donations.filter(d=>d.status==='قيد الجمع').length;
 
   return (
-    <div>
-      {modal&&<DonationModal init={modal==='new'?null:modal} cases={cases} onClose={()=>setModal(null)} />}
+    <div className="donations-page">
+      {modal&&<DonationModal init={modal==='new'?null:modal} cases={cases} onClose={()=>setModal(null)} isAr={isAr} />}
 
       {/* Mini stats */}
       <div className="stats-grid">
         {[
-          {l:'إجمالي التبرعات',v:total,     icon:'bi-heart-fill',    c:'stat-red'},
-          {l:'إجمالي المبالغ', v:`${totalAmt.toLocaleString('ar')} ج.س`,icon:'bi-cash-stack',c:'stat-green'},
-          {l:'تم التوزيع',     v:distrib,   icon:'bi-check-circle-fill',c:'stat-blue'},
-          {l:'قيد الجمع',      v:pending,   icon:'bi-hourglass-split',c:'stat-gold'},
+          {l:isAr ? 'إجمالي التبرعات' : 'Total Donations',v:total,     icon:'bi-heart-fill',    c:'stat-red'},
+          {l:isAr ? 'إجمالي المبالغ' : 'Total Amount', v:`${totalAmt.toLocaleString(isAr?'ar':'en')} ${isAr?'ج.س':'SDG'}`,icon:'bi-cash-stack',c:'stat-green'},
+          {l:isAr ? 'تم التوزيع' : 'Distributed',     v:distrib,   icon:'bi-check-circle-fill',c:'stat-blue'},
+          {l:isAr ? 'قيد الجمع' : 'Collecting',      v:pending,   icon:'bi-hourglass-split',c:'stat-gold'},
         ].map((s,i)=>(
           <div className={`stat-card ${s.c}`} key={i}>
             <div className="stat-icon"><i className={`bi ${s.icon}`}></i></div>
@@ -1139,14 +1223,14 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
       </div>
 
       {/* Filters + Add */}
-      <div className="d-flex gap-2 mb-3 flex-wrap align-items-center justify-content-between">
+      <div className="donations-toolbar d-flex gap-2 mb-3 flex-wrap align-items-center justify-content-between">
         <div className="d-flex gap-2 flex-wrap flex-fill">
           <div className="search-wrap flex-fill" style={{maxWidth:300}}>
             <i className="bi bi-search search-icon"></i>
-            <input className="search-input" type="text" placeholder="بحث في التبرعات..." value={q} onChange={e=>setQ(e.target.value)} />
+            <input className="search-input" type="text" placeholder={isAr ? "بحث في التبرعات..." : "Search donations..."} value={q} onChange={e=>setQ(e.target.value)} />
           </div>
           <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={st} onChange={e=>setSt(e.target.value)}>
-            <option value="all">كل الحالات</option>
+            <option value="all">{isAr ? 'كل الحالات' : 'All Statuses'}</option>
             {DON_STATUSES.map(s=><option key={s}>{s}</option>)}
           </select>
         </div>
@@ -1155,32 +1239,32 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
           style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
           onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
           onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
-        ><i className="bi bi-plus-circle-fill"></i>تسجيل تبرع</button>
+        ><i className="bi bi-plus-circle-fill"></i>{isAr ? 'تسجيل تبرع' : 'Record Donation'}</button>
       </div>
 
       <div className="card">
         <div className="table-wrapper">
-          <table className="table">
+          <table className="table donations-table">
             <thead>
               <tr>
-                <th>المتبرع</th>
-                <th>الحالة المستفيدة</th>
-                <th>المبلغ / العطاء</th>
-                <th>طريقة الدفع</th>
-                <th>الفئة</th>
-                <th>تاريخ التبرع</th>
-                <th>الحالة</th>
-                <th>إجراءات</th>
+                <th>{isAr ? 'المتبرع' : 'Donor'}</th>
+                <th>{isAr ? 'الحالة المستفيدة' : 'Beneficiary Case'}</th>
+                <th>{isAr ? 'المبلغ / العطاء' : 'Amount / Item'}</th>
+                <th>{isAr ? 'طريقة الدفع' : 'Payment Method'}</th>
+                <th>{isAr ? 'الفئة' : 'Category'}</th>
+                <th>{isAr ? 'تاريخ التبرع' : 'Donation Date'}</th>
+                <th>{isAr ? 'الحالة' : 'Status'}</th>
+                <th>{isAr ? 'إجراءات' : 'Actions'}</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length===0
-                ?<tr><td colSpan={8}><Empty icon="bi-heart" title="لا توجد تبرعات" sub="ابدأ بتسجيل أول تبرع" /></td></tr>
+                ?<tr><td colSpan={8}><Empty icon="bi-heart" title={isAr ? "لا توجد تبرعات" : "No donations"} sub={isAr ? "ابدأ بتسجيل أول تبرع" : "Start recording donations"} /></td></tr>
                 :filtered.map(d=>{
                   return(
                     <tr key={d.id}>
-                      <td>
-                        <div className="d-flex align-items-center gap-2">
+                      <td data-label={isAr ? 'المتبرع' : 'Donor'}>
+                        <div className="user-cell d-flex align-items-center gap-2">
                           {(() => {
                             const dUser = users && users.find(u => (d.uid && u.uid === d.uid) || (d.donorId && u.uid === d.donorId) || (d.userId && u.uid === d.userId) || (d.email && u.email === d.email) || (d.donorName && u.name === d.donorName));
                             const pUrl = d.photoURL || d.donorPhotoURL || (dUser ? dUser.photoURL : null);
@@ -1188,18 +1272,18 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
                               ? <img src={pUrl} alt={d.donorName||'مجهول'} style={{width:30,height:30,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} />
                               : <Av name={d.donorName||'م'} size={30} />;
                           })()}
-                          <span className="bold" style={{fontSize:'.77rem'}}>{d.donorName||'مجهول'}</span>
+                          <span className="bold" style={{fontSize:'.77rem'}}>{d.donorName||(isAr ? 'مجهول' : 'Anonymous')}</span>
                         </div>
                       </td>
-                      <td style={{fontSize:'.74rem',color:'var(--text-secondary)',maxWidth:140,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{d.caseTitle||'تبرع عام'}</td>
-                      <td><span className="badge badge-approved" style={{fontVariantNumeric:'tabular-nums'}}>{d.amountOrItem||'—'}</span></td>
-                      <td style={{fontSize:'.72rem',color:'var(--text-secondary)'}}>
+                      <td data-label={isAr ? 'الحالة المستفيدة' : 'Beneficiary Case'} style={{fontSize:'.74rem',color:'var(--text-secondary)',maxWidth:140,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{d.caseTitle||(isAr ? 'تبرع عام' : 'General Donation')}</td>
+                      <td data-label={isAr ? 'المبلغ / العطاء' : 'Amount / Item'}><span className="badge badge-approved" style={{fontVariantNumeric:'tabular-nums'}}>{d.amountOrItem||'—'}</span></td>
+                      <td data-label={isAr ? 'طريقة الدفع' : 'Payment Method'} style={{fontSize:'.72rem',color:'var(--text-secondary)'}}>
                         <div>
                           {d.paymentMethod||'—'}
-                          {d.isRecurring && <span className="badge mx-1" style={{background:'var(--brand-500)',color:'#fff',fontSize:'9px'}}>خصم دوري</span>}
+                          {d.isRecurring && <span className="badge mx-1" style={{background:'var(--brand-500)',color:'#fff',fontSize:'9px'}}>{isAr ? 'خصم دوري' : 'Recurring'}</span>}
                         </div>
                         {d.transactionId && <div style={{marginTop:4, color:'var(--brand-500)', fontWeight:600}}><i className="bi bi-hash"></i> {d.transactionId}</div>}
-                        {d.cardNumber && <div style={{marginTop:4, fontSize:'0.65rem'}}><i className="bi bi-credit-card"></i> المنتهية بـ {d.cardNumber}</div>}
+                        {d.cardNumber && <div style={{marginTop:4, fontSize:'0.65rem'}}><i className="bi bi-credit-card"></i> {isAr ? 'المنتهية بـ' : 'Ending in'} {d.cardNumber}</div>}
                         {d.receiptUrl && (
                           <div style={{marginTop:4}}>
                             {String(d.receiptUrl).match(/\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i) ? (
@@ -1208,7 +1292,7 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
                               </a>
                             ) : (
                               <a href={d.receiptUrl} target="_blank" rel="noopener noreferrer" className="badge badge-completed text-decoration-none" style={{fontSize:'0.6rem',display:'inline-flex',alignItems:'center',gap:3}}>
-                                <i className="bi bi-receipt"></i>إيصال تحويل
+                                <i className="bi bi-receipt"></i>{isAr ? 'إيصال تحويل' : 'Transfer Receipt'}
                               </a>
                             )}
                           </div>
@@ -1216,43 +1300,43 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
                         {d.aiSuspicionFlag && (
                           <div style={{fontSize:'0.65rem',color:'#ef4444',marginTop:6,background:'rgba(239,68,68,0.1)',padding:'4px 6px',borderRadius:4}}>
                             <i className="bi bi-robot me-1"></i>
-                            تحليل ذكي: احتمال تباين في الإشعار أو البيانات
+                            {isAr ? 'تحليل ذكي: احتمال تباين في الإشعار أو البيانات' : 'Smart analysis: potential receipt discrepancy'}
                           </div>
                         )}
                         {d.donorMessage && <div style={{fontSize:'0.65rem',color:'var(--gold)',marginTop:4}}><i className="bi bi-chat-quote-fill me-1"></i>"{d.donorMessage}"</div>}
                       </td>
-                      <td><span className={catBadge(d.category)}>{d.category||'—'}</span></td>
-                      <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>
-                        <div>مضاف: {d.createdAt?.toDate ? formatDate(d.createdAt) : (typeof d.createdAt === 'number' ? formatDate(d.createdAt) : '—')}</div>
-                        {d.receivedAt && <div style={{color:'var(--blue-light)'}}>استلم: {d.receivedAt?.toDate ? formatDate(d.receivedAt) : formatDate(d.receivedAt)}</div>}
-                        {d.distributedAt && <div style={{color:'var(--primary-light)'}}>وزّع: {d.distributedAt?.toDate ? formatDate(d.distributedAt) : formatDate(d.distributedAt)}</div>}
+                      <td data-label={isAr ? 'الفئة' : 'Category'}><span className={catBadge(d.category)}>{d.category||'—'}</span></td>
+                      <td data-label={isAr ? 'تاريخ التبرع' : 'Donation Date'} style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>
+                        <div>{isAr ? 'مضاف:' : 'Added:'} {d.createdAt?.toDate ? formatDate(d.createdAt) : (typeof d.createdAt === 'number' ? formatDate(d.createdAt) : '—')}</div>
+                        {d.receivedAt && <div style={{color:'var(--blue-light)'}}>{isAr ? 'استلم:' : 'Received:'} {d.receivedAt?.toDate ? formatDate(d.receivedAt) : formatDate(d.receivedAt)}</div>}
+                        {d.distributedAt && <div style={{color:'var(--primary-light)'}}>{isAr ? 'وزّع:' : 'Distributed:'} {d.distributedAt?.toDate ? formatDate(d.distributedAt) : formatDate(d.distributedAt)}</div>}
                       </td>
-                      <td>
+                      <td data-label={isAr ? 'الحالة' : 'Status'}>
                         <select className="form-input" style={{width:'auto',padding:'4px 10px',fontSize:'12px'}}
                           value={d.status||'قيد الجمع'} onChange={e=>doDonStat(d.id,e.target.value)}>
                           {DON_STATUSES.map(s=><option key={s}>{s}</option>)}
                         </select>
                       </td>
-                      <td>
+                      <td data-label={isAr ? 'إجراءات' : 'Actions'}>
                         <div className="d-flex gap-1">
                           {d.status === 'قيد الجمع' && (
-                            <button className="btn btn-outline btn-icon btn-sm" style={{borderColor:'var(--primary-light)',color:'var(--primary-light)'}} onClick={()=>doConfirmReceived(d.id, d.donorName)} title="تأكيد الاستلام">
+                            <button className="btn btn-outline btn-icon btn-sm" style={{borderColor:'var(--primary-light)',color:'var(--primary-light)'}} onClick={()=>doConfirmReceived(d.id, d.donorName)} title={isAr ? "تأكيد الاستلام" : "Confirm Receipt"}>
                               <i className="bi bi-heart-fill"></i>
                             </button>
                           )}
                           {d.status === 'تم الاستلام' && (
-                            <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doConfirmDistributed(d)} title="تأكيد التوزيع">
+                            <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doConfirmDistributed(d)} title={isAr ? "تأكيد التوزيع" : "Confirm Distribution"}>
                               <i className="bi bi-check-lg"></i>
                             </button>
                           )}
                           {d.status === 'قيد المراجعة' && (
                             <>
-                              <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مقبول (خصم تلقائي)')} title="موافقة (خصم)"><i className="bi bi-check-circle-fill"></i></button>
-                              <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مرفوض')} title="رفض الدفع"><i className="bi bi-x-circle-fill"></i></button>
+                              <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مقبول (خصم تلقائي)')} title={isAr ? "موافقة (خصم)" : "Approve (Deduct)"}><i className="bi bi-check-circle-fill"></i></button>
+                              <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مرفوض')} title={isAr ? "رفض الدفع" : "Reject Payment"}><i className="bi bi-x-circle-fill"></i></button>
                             </>
                           )}
-                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(d)} title="تعديل"><i className="bi bi-pencil"></i></button>
-                          <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelDon(d)} title="حذف"><i className="bi bi-trash3"></i></button>
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(d)} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
+                          <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelDon(d)} title={isAr ? "حذف" : "Delete"}><i className="bi bi-trash3"></i></button>
                         </div>
                       </td>
                     </tr>
@@ -1270,7 +1354,7 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
 // ══════════════════════════════════════════
 // USER FORM MODAL
 // ══════════════════════════════════════════
-function UserModal({init, onClose}) {
+function UserModal({init, onClose, isAr}) {
   const isEdit=!!init?.id;
   const [f,setF]=useState({
     name:init?.name||'',email:init?.email||'',
@@ -1281,7 +1365,7 @@ function UserModal({init, onClose}) {
   const [saving,setSaving]=useState(false);
   const up=k=>e=>setF(p=>({...p,[k]:e.target.value}));
   const save=async()=>{
-    if(!f.name.trim()){showToast('error','بيانات ناقصة','الاسم مطلوب');return}
+    if(!f.name.trim()){showToast('error',isAr?'بيانات ناقصة':'Missing Data',isAr?'الاسم مطلوب':'Full name is required');return}
     setSaving(true);
     try{
       const data={
@@ -1295,33 +1379,33 @@ function UserModal({init, onClose}) {
           data.photoURL = urls[0];
         }
       }
-      if(isEdit){await updateDoc(doc(db,'users',init.id),data);showToast('success','تم التعديل','تم تحديث بيانات المستخدم')}
-      else{await addDoc(collection(db,'users'),{...data,isActive:true,createdAt:serverTimestamp()});showToast('success','تمت الإضافة','تم تسجيل المستخدم')}
+      if(isEdit){await updateDoc(doc(db,'users',init.id),data);showToast('success',isAr?'تم التعديل':'Updated',isAr?'تم تحديث بيانات المستخدم':'User profile updated')}
+      else{await addDoc(collection(db,'users'),{...data,isActive:true,createdAt:serverTimestamp()});showToast('success',isAr?'تمت الإضافة':'Created',isAr?'تم تسجيل المستخدم':'User registered successfully')}
       onClose();
-    }catch(e){showToast('error','خطأ',e.message)}finally{setSaving(false)}
+    }catch(e){showToast('error',isAr?'خطأ':'Error',e.message)}finally{setSaving(false)}
   };
   return (
-    <Modal title={isEdit?'تعديل مستخدم':'إضافة مستخدم جديد'} icon={isEdit?'bi-pencil-fill':'bi-person-plus-fill'} onClose={onClose}
-      footer={<><button className="btn btn-outline" onClick={onClose}>إلغاء</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>جارٍ الحفظ...</>:<><i className="bi bi-check-lg"></i>{isEdit?'حفظ التعديلات':'إضافة المستخدم'}</>}</button></>}>
+    <Modal title={isEdit?(isAr?'تعديل مستخدم':'Edit User'):(isAr?'إضافة مستخدم جديد':'Add New User')} icon={isEdit?'bi-pencil-fill':'bi-person-plus-fill'} onClose={onClose}
+      footer={<><button className="btn btn-outline" onClick={onClose}>{isAr ? 'إلغاء' : 'Cancel'}</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>{isAr ? 'جارٍ الحفظ...' : 'Saving...'}</>:<><i className="bi bi-check-lg"></i>{isEdit?(isAr ? 'حفظ التعديلات' : 'Save Changes'):(isAr ? 'إضافة المستخدم' : 'Add User')}</>}</button></>}>
       <div className="row g-3">
         <div className="col-md-12">
-          <Field label="الصورة الشخصية">
+          <Field label={isAr ? "الصورة الشخصية" : "Profile Photo"}>
             {init?.photoURL && (
               <div style={{marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12}}>
                 <img src={init.photoURL} alt="Current profile" style={{width: 50, height: 50, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border)'}} />
-                <span style={{fontSize: '.75rem', color: 'var(--text-secondary)'}}>الصورة الحالية</span>
+                <span style={{fontSize: '.75rem', color: 'var(--text-secondary)'}}>{isAr ? 'الصورة الحالية' : 'Current Photo'}</span>
               </div>
             )}
             <input className="form-input" type="file" accept="image/*" onChange={e=>setPhotoFile(e.target.files[0])} />
-            <div style={{fontSize:'.65rem',color:'var(--text-secondary)',marginTop:'4px'}}>اختر صورة جديدة لتحديث الصورة الحالية للمستخدم (اتركه فارغاً للاحتفاظ بالصورة الحالية)</div>
+            <div style={{fontSize:'.65rem',color:'var(--text-secondary)',marginTop:'4px'}}>{isAr ? 'اختر صورة جديدة لتحديث الصورة الحالية للمستخدم' : 'Choose a new photo to update current profile photo'}</div>
           </Field>
         </div>
-        <div className="col-md-6"><Field label="الاسم الكامل *"><input className="form-input" value={f.name} onChange={up('name')} placeholder="الاسم الكامل" /></Field></div>
-        <div className="col-md-6"><Field label="البريد الإلكتروني"><input className="form-input" type="email" value={f.email} onChange={up('email')} placeholder="example@email.com" /></Field></div>
-        <div className="col-md-6"><Field label="رقم الهاتف"><input className="form-input" type="tel" value={f.phone} onChange={up('phone')} placeholder="05xxxxxxxx" /></Field></div>
-        <div className="col-md-6"><Field label="نوع الحساب / الدور"><select className="form-input" value={f.role} onChange={up('role')} disabled={init?.role==='admin'}><option value="donor">متبرع (donor)</option><option value="beneficiary">مستفيد (beneficiary)</option><option value="volunteer">متطوع (volunteer)</option>{init?.role==='admin' && <option value="admin">مدير (admin)</option>}</select></Field></div>
-        <div className="col-md-6"><Field label="الحالة"><select className="form-input" value={f.status} onChange={up('status')}><option value="active">نشط</option><option value="suspended">موقوف</option></select></Field></div>
-        <div className="col-md-6"><Field label="العنوان"><input className="form-input" value={f.address} onChange={up('address')} placeholder="المدينة / المنطقة" /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "الاسم الكامل *" : "Full Name *"}><input className="form-input" value={f.name} onChange={up('name')} placeholder={isAr ? "الاسم الكامل" : "Full Name"} /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "البريد الإلكتروني" : "Email Address"}><input className="form-input" type="email" value={f.email} onChange={up('email')} placeholder="example@email.com" /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "رقم الهاتف" : "Phone Number"}><input className="form-input" type="tel" value={f.phone} onChange={up('phone')} placeholder="09xxxxxxxx" /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "نوع الحساب / الدور" : "Role / Account Type"}><select className="form-input" value={f.role} onChange={up('role')} disabled={init?.role==='admin'}><option value="donor">{isAr ? 'متبرع (donor)' : 'Donor'}</option><option value="beneficiary">{isAr ? 'مستفيد (beneficiary)' : 'Beneficiary'}</option><option value="volunteer">{isAr ? 'متطوع (volunteer)' : 'Volunteer'}</option>{init?.role==='admin' && <option value="admin">{isAr ? 'مدير (admin)' : 'Admin'}</option>}</select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option value="active">{isAr ? 'نشط' : 'Active'}</option><option value="suspended">{isAr ? 'موقوف' : 'Suspended'}</option></select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "العنوان" : "Address"}><input className="form-input" value={f.address} onChange={up('address')} placeholder={isAr ? "المدينة / المنطقة" : "City / Region"} /></Field></div>
       </div>
     </Modal>
   );
@@ -1330,7 +1414,7 @@ function UserModal({init, onClose}) {
 // ══════════════════════════════════════════
 // USERS VIEW
 // ══════════════════════════════════════════
-function UsersView({users, doToggle, doDelUser, doChangeRole}) {
+function UsersView({users, doToggle, doDelUser, doChangeRole, isAr}) {
   const [q,setQ]=useState(''); const [role,setRole]=useState('all');
   const [modal,setModal]=useState(null);
   const filt=users.filter(u=>{
@@ -1338,26 +1422,26 @@ function UsersView({users, doToggle, doDelUser, doChangeRole}) {
     return mq&&(role==='all'||u.role===role);
   });
   const ROLES={
-    admin:       {c:'badge badge-supervisor',i:'bi-shield-fill',       l:'مدير'},
-    donor:       {c:'badge badge-donor',     i:'bi-heart-fill',        l:'متبرع'},
-    beneficiary: {c:'badge badge-rejected',  i:'bi-person-hearts',     l:'مستفيد'},
-    volunteer:   {c:'badge badge-pending',   i:'bi-people-fill',       l:'متطوع'},
+    admin:       {c:'badge badge-supervisor',i:'bi-shield-fill',       l:isAr?'مدير':'Admin'},
+    donor:       {c:'badge badge-donor',     i:'bi-heart-fill',        l:isAr?'متبرع':'Donor'},
+    beneficiary: {c:'badge badge-rejected',  i:'bi-person-hearts',     l:isAr?'مستفيد':'Beneficiary'},
+    volunteer:   {c:'badge badge-pending',   i:'bi-people-fill',       l:isAr?'متطوع':'Volunteer'},
   };
   return (
-    <div className="page active">
-      {modal&&<UserModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} />}
-      <div className="d-flex gap-2 mb-4 flex-wrap align-items-center justify-content-between">
+    <div className="page active users-page">
+      {modal&&<UserModal init={modal==='new'?null:modal} onClose={()=>setModal(null)} isAr={isAr} />}
+      <div className="users-toolbar d-flex gap-2 mb-4 flex-wrap align-items-center justify-content-between">
         <div className="d-flex gap-2 flex-fill flex-wrap">
           <div className="search-wrap flex-fill" style={{maxWidth:280}}>
             <i className="bi bi-search search-icon"></i>
-            <input className="search-input" type="text" placeholder="بحث بالاسم أو البريد أو الهاتف..." value={q} onChange={e=>setQ(e.target.value)} />
+            <input className="search-input" type="text" placeholder={isAr ? "بحث بالاسم أو البريد أو الهاتف..." : "Search by name, email, or phone..."} value={q} onChange={e=>setQ(e.target.value)} />
           </div>
           <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={role} onChange={e=>setRole(e.target.value)}>
-            <option value="all">كل الأدوار</option>
-            <option value="admin">مدير</option>
-            <option value="donor">متبرع</option>
-            <option value="beneficiary">مستفيد</option>
-            <option value="volunteer">متطوع</option>
+            <option value="all">{isAr ? 'كل الأدوار' : 'All Roles'}</option>
+            <option value="admin">{isAr ? 'مدير' : 'Admin'}</option>
+            <option value="donor">{isAr ? 'متبرع' : 'Donor'}</option>
+            <option value="beneficiary">{isAr ? 'مستفيد' : 'Beneficiary'}</option>
+            <option value="volunteer">{isAr ? 'متطوع' : 'Volunteer'}</option>
           </select>
         </div>
         <button
@@ -1365,22 +1449,22 @@ function UsersView({users, doToggle, doDelUser, doChangeRole}) {
           style={{display:'flex',alignItems:'center',gap:7,padding:'9px 18px',borderRadius:'50px',background:'linear-gradient(135deg,var(--primary-dark),var(--primary))',color:'#fff',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,boxShadow:'0 4px 16px rgba(232,80,10,0.35)',transition:'all 0.2s ease',whiteSpace:'nowrap'}}
           onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(232,80,10,0.5)'}}
           onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(232,80,10,0.35)'}}
-        ><i className="bi bi-person-plus-fill"></i>إضافة مستخدم</button>
+        ><i className="bi bi-person-plus-fill"></i>{isAr ? 'إضافة مستخدم' : 'Add User'}</button>
       </div>
       <div className="card">
         <div className="table-wrapper">
-          <table className="table">
-            <thead><tr><th>المستخدم</th><th>الدور</th><th>الهاتف</th><th>الحالة</th><th>منذ</th><th>إجراءات</th></tr></thead>
+          <table className="table users-table">
+            <thead><tr><th>{isAr ? 'المستخدم' : 'User'}</th><th>{isAr ? 'الدور' : 'Role'}</th><th>{isAr ? 'الهاتف' : 'Phone'}</th><th>{isAr ? 'الحالة' : 'Status'}</th><th>{isAr ? 'منذ' : 'Since'}</th><th>{isAr ? 'إجراءات' : 'Actions'}</th></tr></thead>
             <tbody>
               {filt.length===0
-                ?<tr><td colSpan={6}><Empty icon="bi-people" title="لا توجد نتائج" /></td></tr>
+                ?<tr><td colSpan={6}><Empty icon="bi-people" title={isAr ? "لا توجد نتائج" : "No users found"} /></td></tr>
                 :filt.map(u=>{
                   const userRole = u.role || u.accountType || 'member';
-                  const rc=ROLES[userRole]||{c:'badge badge-pending',i:'bi-person',l:'مستخدم'};
+                  const rc=ROLES[userRole]||{c:'badge badge-pending',i:'bi-person',l:isAr?'مستخدم':'User'};
                   const active=u.status!=='suspended'&&u.isActive!==false;
                   return(
                     <tr key={u.id}>
-                      <td>
+                      <td data-label={isAr ? 'المستخدم' : 'User'}>
                         <div className="d-flex align-items-center gap-2">
                           {u.photoURL
                             ? <img
@@ -1388,17 +1472,17 @@ function UsersView({users, doToggle, doDelUser, doChangeRole}) {
                                 alt={u.name}
                                 style={{width:36,height:36,borderRadius:8,objectFit:'cover',opacity:active?1:.5,border:'1.5px solid var(--border)',cursor:'pointer'}}
                                 onClick={()=>window.open(u.photoURL,'_blank')}
-                                title="عرض الصورة"
+                                title={isAr ? "عرض الصورة" : "View Photo"}
                               />
                             : <Av name={u.name} size={36} r={8} op={active?1:.5} />
                           }
                           <div>
-                            <div style={{fontSize:'.77rem',fontWeight:700}}>{u.name||'بدون اسم'}</div>
+                            <div style={{fontSize:'.77rem',fontWeight:700}}>{u.name||(isAr ? 'بدون اسم' : 'Unnamed')}</div>
                             <div style={{fontSize:'.63rem',color:'var(--text-secondary)'}}>{u.email}</div>
                           </div>
                         </div>
                       </td>
-                      <td>
+                      <td data-label={isAr ? 'الدور' : 'Role'}>
                         {userRole === 'admin' ? (
                           <span className={rc.c} style={{padding:'6px 12px',fontSize:'12px',fontWeight:'bold',display:'inline-block'}}>{rc.l}</span>
                         ) : (
@@ -1408,28 +1492,28 @@ function UsersView({users, doToggle, doDelUser, doChangeRole}) {
                             value={userRole} 
                             onChange={(e) => doChangeRole(u.id, u.name, e.target.value)}
                           >
-                            <option value="donor" style={{color:'#000'}}>متبرع</option>
-                            <option value="beneficiary" style={{color:'#000'}}>مستفيد</option>
-                            <option value="volunteer" style={{color:'#000'}}>متطوع</option>
+                            <option value="donor" style={{color:'#000'}}>{isAr ? 'متبرع' : 'Donor'}</option>
+                            <option value="beneficiary" style={{color:'#000'}}>{isAr ? 'مستفيد' : 'Beneficiary'}</option>
+                            <option value="volunteer" style={{color:'#000'}}>{isAr ? 'متطوع' : 'Volunteer'}</option>
                           </select>
                         )}
                       </td>
-                      <td style={{fontSize:'.73rem',color:'var(--text-secondary)'}}>{u.phone||'—'}</td>
-                      <td>
+                      <td data-label={isAr ? 'الهاتف' : 'Phone'} style={{fontSize:'.73rem',color:'var(--text-secondary)'}}>{u.phone||'—'}</td>
+                      <td data-label={isAr ? 'الحالة' : 'Status'}>
                         <span className={`badge ${active?'badge-active':'badge-suspended'}`}>
                           <i className={`bi ${active?'bi-circle-fill':'bi-circle'}`} style={{fontSize:'.43rem'}}></i>
-                          {active?'نشط':'موقوف'}
+                          {active?(isAr ? 'نشط' : 'Active'):(isAr ? 'موقوف' : 'Suspended')}
                         </span>
                       </td>
-                      <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>{u.createdAt?.toDate?timeAgo(u.createdAt):'—'}</td>
-                      <td>
+                      <td data-label={isAr ? 'منذ' : 'Since'} style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>{u.createdAt?.toDate?timeAgo(u.createdAt):'—'}</td>
+                      <td data-label={isAr ? 'إجراءات' : 'Actions'}>
                         <div className="d-flex gap-1">
-                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(u)} title="تعديل"><i className="bi bi-pencil"></i></button>
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(u)} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
                           <button className={`btn btn-icon btn-sm ${active?'btn-outline':'btn-approve'}`}
-                            onClick={()=>doToggle(u.id,active?'active':'suspended',u.name,userRole)} title={active?'تعليق':'تفعيل'} disabled={userRole==='admin'}>
+                            onClick={()=>doToggle(u.id,active?'active':'suspended',u.name,userRole)} title={active?(isAr ? 'تعليق' : 'Suspend'):(isAr ? 'تفعيل' : 'Activate')} disabled={userRole==='admin'}>
                             <i className={`bi ${active?'bi-lock-fill':'bi-unlock-fill'}`} style={{color:active?'#ef4444':''}}></i>
                           </button>
-                          <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelUser(u.id,u.name,userRole)} title="حذف" disabled={userRole==='admin'}><i className="bi bi-trash3"></i></button>
+                          <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDelUser(u.id,u.name,userRole)} title={isAr ? "حذف" : "Delete"} disabled={userRole==='admin'}><i className="bi bi-trash3"></i></button>
                         </div>
                       </td>
                     </tr>
@@ -1447,7 +1531,7 @@ function UsersView({users, doToggle, doDelUser, doChangeRole}) {
 // ══════════════════════════════════════════
 // CHATS VIEW
 // ══════════════════════════════════════════
-function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userInfo,users,doDelMsg,doEditMsg,doDelChat}) {
+function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userInfo,users,doDelMsg,doEditMsg,doDelChat,isAr}) {
   const endRef=useRef(null);
   const [editingMsg, setEditingMsg] = useState(null);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'})},[msgs]);
@@ -1455,45 +1539,47 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
   // Find current chat name and user
   const currentChat = chats.find(c => c.id === activeChatId);
   const chatUser = currentChat ? users.find(u => u.uid === currentChat.userId) : null;
-  const ROLE_LABELS = { beneficiary: 'مستفيد', volunteer: 'متطوع', donor: 'متبرع' };
-  const roleLabel = chatUser ? (ROLE_LABELS[chatUser.role||chatUser.accountType] || 'مستخدم') : 'مستخدم';
+  const ROLE_LABELS = isAr 
+    ? { beneficiary: 'مستفيد', volunteer: 'متطوع', donor: 'متبرع' }
+    : { beneficiary: 'Beneficiary', volunteer: 'Volunteer', donor: 'Donor' };
+  const roleLabel = chatUser ? (ROLE_LABELS[chatUser.role||chatUser.accountType] || (isAr ? 'مستخدم' : 'User')) : (isAr ? 'مستخدم' : 'User');
   const chatPhoto = chatUser?.photoURL || currentChat?.photoURL;
 
   return (
     <div className="page active">
       <div className="card" style={{height:'calc(100dvh - 142px)',display:'flex',flexDirection:'row',overflow:'hidden'}}>
         {/* Sidebar chat list */}
-        <div style={{width:300,minWidth:300,borderLeft:'1px solid var(--border)',overflowY:'auto',flexShrink:0,background:'rgba(255,255,255,0.01)'}}>
+        <div style={{width:300,minWidth:300,borderLeft:isAr?'1px solid var(--border)':'none',borderRight:!isAr?'1px solid var(--border)':'none',overflowY:'auto',flexShrink:0,background:'rgba(255,255,255,0.01)'}}>
           <div className="card-header" style={{borderBottom:'1px solid var(--border)',paddingBottom:11}}>
-            <div style={{fontSize:'.9rem',fontWeight:800}}>المحادثات</div>
-            <div style={{fontSize:'.7rem',color:'var(--text-secondary)'}}>{chats.length} محادثة</div>
+            <div style={{fontSize:'.9rem',fontWeight:800}}>{isAr ? 'المحادثات' : 'Conversations'}</div>
+            <div style={{fontSize:'.7rem',color:'var(--text-secondary)'}}>{isAr ? `${chats.length} محادثة` : `${chats.length} conversations`}</div>
           </div>
-          {chats.length===0?<Empty icon="bi-chat-dots" title="لا توجد محادثات" />
+          {chats.length===0?<Empty icon="bi-chat-dots" title={isAr ? "لا توجد محادثات" : "No conversations"} />
            :chats.map(ch=>{
              const u = users.find(usr => usr.uid === ch.userId);
              const pUrl = u?.photoURL || ch?.photoURL;
-             const rLabel = u ? (ROLE_LABELS[u.role||u.accountType] || 'مستخدم') : 'مستخدم';
-             const roleColor = rLabel === 'متطوع' ? 'var(--gold)' : rLabel === 'متبرع' ? 'var(--primary-light)' : 'var(--blue-light)';
+             const rLabel = u ? (ROLE_LABELS[u.role||u.accountType] || (isAr ? 'مستخدم' : 'User')) : (isAr ? 'مستخدم' : 'User');
+             const roleColor = (u?.role||u?.accountType) === 'volunteer' ? 'var(--gold)' : (u?.role||u?.accountType) === 'donor' ? 'var(--primary-light)' : 'var(--blue-light)';
              return (
                <div key={ch.id} style={{position:'relative',borderBottom:'1px solid var(--border)'}}>
                  <button className={`nav-item ${activeChatId===ch.id?'active':''}`}
-                   style={{borderRadius:0,margin:0,width:'100%',borderLeft:'none',borderRight:'none',borderTop:'none',borderBottom:'none',padding:'12px 16px',textAlign:'right',background:activeChatId===ch.id?'rgba(46,125,50,0.15)':'transparent', paddingLeft:40}}
+                   style={{borderRadius:0,margin:0,width:'100%',borderLeft:'none',borderRight:'none',borderTop:'none',borderBottom:'none',padding:'12px 16px',textAlign:isAr?'right':'left',background:activeChatId===ch.id?'rgba(46,125,50,0.15)':'transparent', paddingLeft:isAr?40:16, paddingRight:!isAr?40:16}}
                    onClick={()=>setChat(ch.id)}>
                    {pUrl ? <img src={pUrl} alt="صورة" style={{width:34,height:34,borderRadius:'50%',objectFit:'cover',border:`2px solid ${roleColor}`}} /> : <Av name={ch.userName} size={34} />}
-                   <div style={{flex:1,minWidth:0,marginRight:10}}>
+                   <div style={{flex:1,minWidth:0,marginRight:isAr?10:0,marginLeft:!isAr?10:0}}>
                      <div style={{fontSize:'.8rem',fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',color:'var(--text-primary)'}}>
-                       {ch.userName||'مستخدم'}
-                       <span style={{fontSize:'10px', color:roleColor, marginRight:6, padding:'2px 6px', background:`${roleColor}22`, borderRadius:10}}>{rLabel}</span>
+                       {ch.userName||(isAr ? 'مستخدم' : 'User')}
+                       <span style={{fontSize:'10px', color:roleColor, marginRight:isAr?6:0, marginLeft:!isAr?6:0, padding:'2px 6px', background:`${roleColor}22`, borderRadius:10}}>{rLabel}</span>
                      </div>
-                     <div style={{fontSize:'.68rem',color:'var(--text-secondary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:4}}>{ch.lastMessage||'لا رسائل'}</div>
+                     <div style={{fontSize:'.68rem',color:'var(--text-secondary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:4}}>{ch.lastMessage||(isAr ? 'لا رسائل' : 'No messages')}</div>
                    </div>
-                   {ch.unreadCount>0&&<span className="nav-badge" style={{marginRight:'auto',marginLeft:0}}>{ch.unreadCount}</span>}
+                   {ch.unreadCount>0&&<span className="nav-badge" style={{marginRight:isAr?'auto':0,marginLeft:!isAr?'auto':0}}>{ch.unreadCount}</span>}
                  </button>
                  {/* Delete chat button */}
                  <button
-                   title="حذف المحادثة"
+                   title={isAr ? "حذف المحادثة" : "Delete Conversation"}
                    onClick={(e)=>{e.stopPropagation(); doDelChat(ch.id, ch.userName);}}
-                   style={{position:'absolute',top:'50%',left:8,transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',color:'var(--red,#ef4444)',fontSize:14,opacity:0.5,padding:'4px',borderRadius:4,transition:'opacity 0.2s'}}
+                   style={{position:'absolute',top:'50%',left:isAr?8:'auto',right:!isAr?8:'auto',transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',color:'var(--red,#ef4444)',fontSize:14,opacity:0.5,padding:'4px',borderRadius:4,transition:'opacity 0.2s'}}
                    onMouseEnter={e=>e.currentTarget.style.opacity='1'}
                    onMouseLeave={e=>e.currentTarget.style.opacity='0.5'}
                  ><i className="bi bi-trash3"></i></button>
@@ -1505,13 +1591,13 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
         {/* Messaging window */}
         <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
           {!activeChatId
-            ?<div className="h-100 d-flex align-items-center justify-content-center"><Empty icon="bi-chat-square-dots" title="اختر محادثة" sub="من القائمة على اليمين للبدء بالدردشة" /></div>
+            ?<div className="h-100 d-flex align-items-center justify-content-center"><Empty icon="bi-chat-square-dots" title={isAr ? "اختر محادثة" : "Select a conversation"} sub={isAr ? "من القائمة للبدء بالدردشة" : "From the list to start chatting"} /></div>
             :<>
               <div className="card-header" style={{borderBottom:'1px solid var(--border)'}}>
                 <div className="d-flex align-items-center gap-2">
                   {chatPhoto ? <img src={chatPhoto} alt="صورة" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} /> : <Av name={currentChat?.userName||'م'} size={32} />}
                   <div style={{display:'flex', flexDirection:'column'}}>
-                    <span className="bold">{currentChat?.userName||'مستخدم'}</span>
+                    <span className="bold">{currentChat?.userName||(isAr ? 'مستخدم' : 'User')}</span>
                     <span style={{fontSize:'11px', color:'var(--primary-light)'}}>{roleLabel}</span>
                   </div>
                 </div>
@@ -1535,24 +1621,24 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
                         color:'var(--text-primary)',
                         position:'relative'
                       }}>
-                        <div style={{fontSize:'.62rem',fontWeight:700,color:'var(--text-muted)',marginBottom:3}}>{isAdmin?userInfo.fullName:(m.senderName||currentChat?.userName||'المستخدم')}</div>
+                        <div style={{fontSize:'.62rem',fontWeight:700,color:'var(--text-muted)',marginBottom:3}}>{isAdmin?userInfo.fullName:(m.senderName||currentChat?.userName||(isAr ? 'المستخدم' : 'User'))}</div>
                         
                         {editingMsg?.id === m.id ? (
                           <div className="d-flex flex-column gap-2 mt-2">
                             <input className="form-input" style={{fontSize:'.85rem', padding:'4px 8px'}} autoFocus value={editingMsg.text} onChange={e=>setEditingMsg({...editingMsg, text:e.target.value})} onKeyDown={e=>{if(e.key==='Enter') { doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null); }}} />
                             <div className="d-flex gap-2 justify-content-end">
-                              <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>إلغاء</button>
-                              <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>حفظ</button>
+                              <button type="button" className="btn btn-sm" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>setEditingMsg(null)}>{isAr ? 'إلغاء' : 'Cancel'}</button>
+                              <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px', fontSize:'11px'}} onClick={()=>{doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null);}}>{isAr ? 'حفظ' : 'Save'}</button>
                             </div>
                           </div>
                         ) : (
-                          <div style={{fontSize:'.85rem',lineHeight:1.5}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>(معدل)</span>}</div>
+                          <div style={{fontSize:'.85rem',lineHeight:1.5}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>{isAr ? '(معدل)' : '(edited)'}</span>}</div>
                         )}
                         
                         {isAdmin && !editingMsg && (
                           <div style={{position:'absolute', top:5, left: isAdmin?5:'auto', right: !isAdmin?5:'auto', display:'flex', gap:6, opacity:0.6}}>
-                            <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'var(--text-muted)',padding:0,cursor:'pointer',fontSize:'11px'}} title="تعديل"><i className="bi bi-pencil"></i></button>
-                            <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'var(--red)',padding:0,cursor:'pointer',fontSize:'11px'}} title="حذف"><i className="bi bi-trash"></i></button>
+                            <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'var(--text-muted)',padding:0,cursor:'pointer',fontSize:'11px'}} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
+                            <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'var(--red)',padding:0,cursor:'pointer',fontSize:'11px'}} title={isAr ? "حذف" : "Delete"}><i className="bi bi-trash"></i></button>
                           </div>
                         )}
                       </div>
@@ -1562,8 +1648,8 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
                 <div ref={endRef}></div>
               </div>
               <form className="d-flex gap-2 p-3" style={{borderTop:'1px solid var(--border)',background:'rgba(255,255,255,0.01)'}} onSubmit={sendMsg}>
-                <input className="form-input flex-fill" type="text" placeholder="اكتب رسالة..." value={msgIn} onChange={e=>setMsgIn(e.target.value)} />
-                <button type="submit" className="btn btn-primary"><i className="bi bi-send-fill"></i><span className="d-none d-sm-inline ms-1">إرسال</span></button>
+                <input className="form-input flex-fill" type="text" placeholder={isAr ? "اكتب رسالة..." : "Type a message..."} value={msgIn} onChange={e=>setMsgIn(e.target.value)} />
+                <button type="submit" className="btn btn-primary"><i className="bi bi-send-fill"></i><span className="d-none d-sm-inline ms-1">{isAr ? 'إرسال' : 'Send'}</span></button>
               </form>
             </>
           }
@@ -1576,7 +1662,7 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
 // ══════════════════════════════════════════
 // REPORTS VIEW (Chart.js financial charts)
 // ══════════════════════════════════════════
-function ReportsView({donations, cases, users}) {
+function ReportsView({donations, cases, users, isAr}) {
   const [dateRange, setDateRange] = useState('all'); // all, month, week
   const barRef   = React.useRef(null);
   const pieRef   = React.useRef(null);
@@ -1618,12 +1704,12 @@ function ReportsView({donations, cases, users}) {
   const catData = React.useMemo(()=>{
     const map={};
     filteredDonations.forEach(d=>{
-      const k=d.category||'مالي';
+      const k=d.category||(isAr ? 'مالي' : 'Financial');
       const amt = parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0;
       map[k]=(map[k]||0)+amt;
     });
     return{labels:Object.keys(map),data:Object.values(map)};
-  },[filteredDonations]);
+  },[filteredDonations, isAr]);
 
   React.useEffect(()=>{
     if(!barRef.current)return;
@@ -1636,39 +1722,45 @@ function ReportsView({donations, cases, users}) {
     gradient.addColorStop(0, 'rgba(16,185,129,0.9)');
     gradient.addColorStop(1, 'rgba(16,185,129,0.1)');
 
+    const chartLabel = isAr ? 'إجمالي التبرعات (ج.س)' : 'Total Donations (SDG)';
+    const currencyUnit = isAr ? 'ج.س' : 'SDG';
+
     barChart.current=new Chart(barRef.current,{
       type:'bar',
-      data:{labels:monthlyData.labels,datasets:[{label:'إجمالي التبرعات (ج.س)',data:monthlyData.data,
+      data:{labels:monthlyData.labels,datasets:[{label:chartLabel,data:monthlyData.data,
         backgroundColor:gradient,borderColor:'#10b981',borderWidth:1,borderRadius:6,
         borderSkipped:false, barPercentage:0.6}]},
-      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false},tooltip:{rtl:true,backgroundColor:'rgba(15,23,42,0.9)',titleFont:{family:'Tajawal'},bodyFont:{family:'Tajawal'},padding:12,
-        callbacks:{label:ctx=>`${ctx.parsed.y.toLocaleString('ar')} ج.س`}}},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false},tooltip:{rtl:isAr,backgroundColor:'rgba(15,23,42,0.9)',titleFont:{family:'Tajawal'},bodyFont:{family:'Tajawal'},padding:12,
+        callbacks:{label:ctx=>`${ctx.parsed.y.toLocaleString(isAr?'ar':'en')} ${currencyUnit}`}}},
         scales:{x:{ticks:{color:textColor,font:{family:'Tajawal'}},grid:{display:false}},
-                y:{ticks:{color:textColor,font:{family:'Tajawal'},callback:v=>`${Number(v).toLocaleString('ar')}`},grid:{color:gridColor, borderDash:[5,5]}}}}
+                y:{ticks:{color:textColor,font:{family:'Tajawal'},callback:v=>`${Number(v).toLocaleString(isAr?'ar':'en')}`},grid:{color:gridColor, borderDash:[5,5]}}}}
     });
     return()=>barChart.current?.destroy();
-  },[monthlyData]);
+  },[monthlyData, isAr]);
 
   React.useEffect(()=>{
     if(!pieRef.current)return;
     if(pieChart.current)pieChart.current.destroy();
+    const noDataLabel = isAr ? 'لا بيانات' : 'No Data';
+    const currencyUnit = isAr ? 'ج.س' : 'SDG';
+
     pieChart.current=new Chart(pieRef.current,{
       type:'doughnut',
-      data:{labels:catData.labels.length?catData.labels:['لا بيانات'],datasets:[{data:catData.data.length?catData.data:[1],
+      data:{labels:catData.labels.length?catData.labels:[noDataLabel],datasets:[{data:catData.data.length?catData.data:[1],
         backgroundColor:catData.data.length?['#10b981','#f59e0b','#8b5cf6','#ef4444','#3b82f6']:['rgba(100,100,100,0.2)'],
         borderColor:document.documentElement.getAttribute('data-bs-theme')==='dark'?'#1e293b':'#ffffff',borderWidth:2}]},
       options:{responsive:true, maintainAspectRatio:false, cutout:'70%',
         plugins:{legend:{position:'bottom',labels:{color:'#6c7a9a',padding:20,usePointStyle:true,font:{family:'Tajawal',size:12}}},
-          tooltip:{rtl:true,backgroundColor:'rgba(15,23,42,0.9)',titleFont:{family:'Tajawal'},bodyFont:{family:'Tajawal'},padding:12,callbacks:{label:ctx=>catData.data.length?`${ctx.label}: ${ctx.parsed.toLocaleString('ar')} ج.س`:'لا توجد بيانات'}}}}
+          tooltip:{rtl:isAr,backgroundColor:'rgba(15,23,42,0.9)',titleFont:{family:'Tajawal'},bodyFont:{family:'Tajawal'},padding:12,callbacks:{label:ctx=>catData.data.length?`${ctx.label}: ${ctx.parsed.toLocaleString(isAr?'ar':'en')} ${currencyUnit}`:noDataLabel}}}}
     });
     return()=>pieChart.current?.destroy();
-  },[catData]);
+  },[catData, isAr]);
 
   // Insights Calculations
   const totalAmt = filteredDonations.reduce((s,d)=>s+(parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,''))||0),0);
   const recurring = filteredDonations.filter(d=>d.isRecurring).length;
   const topDonors = filteredDonations.reduce((acc,d)=>{
-    const n = d.donorName||'مجهول';
+    const n = d.donorName||(isAr ? 'مجهول' : 'Anonymous');
     const dUser = users && users.find(u => (d.uid && u.uid === d.uid) || (d.donorId && u.uid === d.donorId) || (d.userId && u.uid === d.userId) || (d.email && u.email === d.email) || (d.donorName && u.name === d.donorName));
     const pUrl = d.photoURL || d.donorPhotoURL || (dUser ? dUser.photoURL : null);
     if (!acc[n]) acc[n] = { amt: 0, photoURL: pUrl };
@@ -1689,11 +1781,11 @@ function ReportsView({donations, cases, users}) {
 
   // Export Functions
   const exportDonationsExcel = () => {
-    if(!filteredDonations.length) { showToast('error', 'تنبيه', 'لا توجد بيانات للتصدير'); return; }
+    if(!filteredDonations.length) { showToast('error', isAr ? 'تنبيه' : 'Notice', isAr ? 'لا توجد بيانات للتصدير' : 'No data to export'); return; }
     const ws_data = filteredDonations.map(d => {
       const ts = d.timestamp || d.createdAt;
       const dDate = ts?.toDate ? ts.toDate() : new Date(ts);
-      return {
+      return isAr ? {
         'رقم التبرع': d.id,
         'اسم المتبرع': d.donorName || 'مجهول',
         'قيمة التبرع': parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0,
@@ -1704,20 +1796,31 @@ function ReportsView({donations, cases, users}) {
         'طريقة الدفع': d.paymentMethod || '—',
         'عنوان الحالة المرتبطة': d.caseTitle || '—',
         'رقم المرجع': d.referenceNumber || '—'
+      } : {
+        'Donation ID': d.id,
+        'Donor Name': d.donorName || 'Anonymous',
+        'Amount': parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0,
+        'Category': d.category || 'Financial',
+        'Status': d.status || 'Pending',
+        'Date': dDate.toLocaleDateString('en-US'),
+        'Time': dDate.toLocaleTimeString('en-US'),
+        'Payment Method': d.paymentMethod || '—',
+        'Case Title': d.caseTitle || '—',
+        'Ref Number': d.referenceNumber || '—'
       };
     });
     const ws = XLSX.utils.json_to_sheet(ws_data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "التبرعات");
+    XLSX.utils.book_append_sheet(wb, ws, isAr ? "التبرعات" : "Donations");
     XLSX.writeFile(wb, `Donations_Report_${dateRange}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const exportCasesExcel = () => {
-    if(!cases.length) { showToast('error', 'تنبيه', 'لا توجد بيانات للتصدير'); return; }
+    if(!cases.length) { showToast('error', isAr ? 'تنبيه' : 'Notice', isAr ? 'لا توجد بيانات للتصدير' : 'No data to export'); return; }
     const ws_data = cases.map(c => {
       const ts = c.createdAt;
       const cDate = ts?.toDate ? ts.toDate() : new Date(ts);
-      return {
+      return isAr ? {
         'رقم الحالة': c.id,
         'عنوان الحالة': c.title || '—',
         'مقدم الطلب': c.applicantName || '—',
@@ -1728,38 +1831,53 @@ function ReportsView({donations, cases, users}) {
         'المدينة': c.location || '—',
         'الأولوية': c.urgencyLevel || 'عادي',
         'تاريخ الإضافة': cDate.toLocaleDateString('ar-SA')
+      } : {
+        'Case ID': c.id,
+        'Title': c.title || '—',
+        'Applicant': c.applicantName || '—',
+        'Target Amount': parseFloat(String(c.amountRequired||c.targetAmount||'0').replace(/[^0-9.]/g,'')) || 0,
+        'Raised Amount': parseFloat(String(c.amountRaised||c.raisedAmount||'0').replace(/[^0-9.]/g,'')) || 0,
+        'Category': c.category || '—',
+        'Status': c.status,
+        'Location': c.location || '—',
+        'Urgency': c.urgencyLevel || 'Normal',
+        'Created Date': cDate.toLocaleDateString('en-US')
       };
     });
     const ws = XLSX.utils.json_to_sheet(ws_data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "الحالات");
+    XLSX.utils.book_append_sheet(wb, ws, isAr ? "الحالات" : "Cases");
     XLSX.writeFile(wb, `Cases_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  const rangeOpts = isAr
+    ? [{v:'all',l:'الكل'},{v:'year',l:'سنة'},{v:'month',l:'30 يوم'},{v:'week',l:'7 أيام'}]
+    : [{v:'all',l:'All'},{v:'year',l:'Year'},{v:'month',l:'30 Days'},{v:'week',l:'7 Days'}];
+
   return(
     <div className="page active pb-5" style={{animation:'fadeIn 0.5s ease-out'}}>
-      <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mb-4 p-3 rounded-4" style={{background:'linear-gradient(90deg, var(--bg-card) 0%, transparent 100%)', borderRight:'4px solid var(--primary)'}}>
+      <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mb-4 p-3 rounded-4" style={{background:'linear-gradient(90deg, var(--bg-card) 0%, transparent 100%)', borderRight:isAr?'4px solid var(--primary)':'none', borderLeft:!isAr?'4px solid var(--primary)':'none'}}>
         <div>
           <div className="bold d-flex align-items-center gap-2" style={{fontSize:'1.3rem'}}>
             <div style={{width:35, height:35, borderRadius:'10px', background:'linear-gradient(135deg, var(--primary), var(--primary-light))', display:'flex', alignItems:'center', justifyContent:'center', color:'white', boxShadow:'0 4px 15px rgba(16,185,129,0.3)'}}>
               <i className="bi bi-bar-chart-fill"></i>
             </div>
-            التقارير والتحليلات المالية
+            {isAr ? 'التقارير والتحليلات المالية' : 'Financial Reports & Analytics'}
           </div>
-          <div style={{fontSize:'.85rem',color:'var(--text-secondary)', marginTop:4}}>لوحة ذكية لتحليل الأداء المالي والتبرعات واستخراج التقارير</div>
+          <div style={{fontSize:'.85rem',color:'var(--text-secondary)', marginTop:4}}>{isAr ? 'لوحة ذكية لتحليل الأداء المالي والتبرعات واستخراج التقارير' : 'Smart dashboard for analyzing financial performance, donations, and exporting reports'}</div>
         </div>
         <div className="d-flex flex-wrap gap-3 align-items-center">
-          <div className="btn-group" dir="ltr" style={{boxShadow:'0 4px 15px rgba(0,0,0,0.08)', borderRadius:'8px', overflow:'hidden'}}>
-            {[{v:'all',l:'الكل'},{v:'year',l:'سنة'},{v:'month',l:'30 يوم'},{v:'week',l:'7 أيام'}].map(opt=>(
+          <div className="btn-group" dir={isAr?"rtl":"ltr"} style={{boxShadow:'0 4px 15px rgba(0,0,0,0.08)', borderRadius:'8px', overflow:'hidden'}}>
+            {rangeOpts.map(opt=>(
               <button key={opt.v} className={`btn btn-sm px-3 py-2 ${dateRange===opt.v?'btn-primary':'btn-light'}`} style={{fontWeight:dateRange===opt.v?'bold':'normal', transition:'all 0.3s'}} onClick={()=>setDateRange(opt.v)}>{opt.l}</button>
             ))}
           </div>
           <div className="d-flex gap-2">
-            <button className="btn btn-sm text-white px-3 py-2 d-flex align-items-center gap-2" style={{background:'linear-gradient(135deg, #10b981, #059669)', borderRadius:'8px', border:'none', boxShadow:'0 4px 12px rgba(16,185,129,0.3)', transition:'all 0.3s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 6px 15px rgba(16,185,129,0.4)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(16,185,129,0.3)'}} onClick={exportDonationsExcel} title="تصدير التبرعات بصيغة Excel">
-              <i className="bi bi-file-earmark-excel-fill fs-6"></i> تقرير التبرعات
+            <button className="btn btn-sm text-white px-3 py-2 d-flex align-items-center gap-2" style={{background:'linear-gradient(135deg, #10b981, #059669)', borderRadius:'8px', border:'none', boxShadow:'0 4px 12px rgba(16,185,129,0.3)', transition:'all 0.3s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 6px 15px rgba(16,185,129,0.4)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(16,185,129,0.3)'}} onClick={exportDonationsExcel} title={isAr ? "تصدير التبرعات بصيغة Excel" : "Export donations as Excel"}>
+              <i className="bi bi-file-earmark-excel-fill fs-6"></i> {isAr ? 'تقرير التبرعات' : 'Donations Report'}
             </button>
-            <button className="btn btn-sm text-white px-3 py-2 d-flex align-items-center gap-2" style={{background:'linear-gradient(135deg, #3b82f6, #2563eb)', borderRadius:'8px', border:'none', boxShadow:'0 4px 12px rgba(59,130,246,0.3)', transition:'all 0.3s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 6px 15px rgba(59,130,246,0.4)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(59,130,246,0.3)'}} onClick={exportCasesExcel} title="تصدير الحالات بصيغة Excel">
-              <i className="bi bi-file-earmark-spreadsheet-fill fs-6"></i> تقرير الحالات
+            <button className="btn btn-sm text-white px-3 py-2 d-flex align-items-center gap-2" style={{background:'linear-gradient(135deg, #3b82f6, #2563eb)', borderRadius:'8px', border:'none', boxShadow:'0 4px 12px rgba(59,130,246,0.3)', transition:'all 0.3s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 6px 15px rgba(59,130,246,0.4)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(59,130,246,0.3)'}} onClick={exportCasesExcel} title={isAr ? "تصدير الحالات بصيغة Excel" : "Export cases as Excel"}>
+              <i className="bi bi-file-earmark-spreadsheet-fill fs-6"></i> {isAr ? 'تقرير الحالات' : 'Cases Report'}
             </button>
           </div>
         </div>
@@ -1775,7 +1893,7 @@ function ReportsView({donations, cases, users}) {
             <div style={{background:'linear-gradient(135deg, #10b981, #059669)', color:'white', width:36, height:36, borderRadius:'10px', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(16,185,129,0.3)'}}>
               <i className="bi bi-lightning-charge-fill fs-5"></i>
             </div>
-            <span className="bold text-success fs-5" style={{textShadow:'0 2px 5px rgba(0,0,0,0.05)'}}>مؤشرات الأداء المالي</span>
+            <span className="bold text-success fs-5" style={{textShadow:'0 2px 5px rgba(0,0,0,0.05)'}}>{isAr ? 'مؤشرات الأداء المالي' : 'Financial Performance Indicators'}</span>
           </div>
           <div className="row g-4">
             <div className="col-md-4">
@@ -1784,8 +1902,8 @@ function ReportsView({donations, cases, users}) {
                   <i className="bi bi-cash-coin fs-4"></i>
                 </div>
                 <div>
-                  <div className="text-muted text-xs mb-1 fw-bold">كفاءة التبرعات</div>
-                  <div className="fw-bold" style={{fontSize:'.85rem'}}>متوسط التبرع: <span className="text-success">{avgDonation.toLocaleString('ar', {maximumFractionDigits:0})} ج.س</span></div>
+                  <div className="text-muted text-xs mb-1 fw-bold">{isAr ? 'كفاءة التبرعات' : 'Donation Efficiency'}</div>
+                  <div className="fw-bold" style={{fontSize:'.85rem'}}>{isAr ? 'متوسط التبرع:' : 'Avg Donation:'} <span className="text-success">{avgDonation.toLocaleString(isAr?'ar':'en', {maximumFractionDigits:0})} {isAr ? 'ج.س' : 'SDG'}</span></div>
                 </div>
               </div>
             </div>
@@ -1795,8 +1913,8 @@ function ReportsView({donations, cases, users}) {
                   <i className="bi bi-star-fill fs-4"></i>
                 </div>
                 <div>
-                  <div className="text-muted text-xs mb-1 fw-bold">التوجه الخيري</div>
-                  <div className="fw-bold" style={{fontSize:'.85rem'}}>الفئة الأكثر تفضيلاً: <span className="text-warning">{highestCat}</span></div>
+                  <div className="text-muted text-xs mb-1 fw-bold">{isAr ? 'التوجه الخيري' : 'Charity Trend'}</div>
+                  <div className="fw-bold" style={{fontSize:'.85rem'}}>{isAr ? 'الفئة الأكثر تفضيلاً:' : 'Top Category:'} <span className="text-warning">{highestCat}</span></div>
                 </div>
               </div>
             </div>
@@ -1806,8 +1924,8 @@ function ReportsView({donations, cases, users}) {
                   <i className="bi bi-bar-chart-line-fill fs-4"></i>
                 </div>
                 <div>
-                  <div className="text-muted text-xs mb-1 fw-bold">مؤشر الإنجاز</div>
-                  <div className="fw-bold" style={{fontSize:'.85rem'}}>نسبة التغطية: <span className="text-primary">{globalProgress.toFixed(1)}%</span></div>
+                  <div className="text-muted text-xs mb-1 fw-bold">{isAr ? 'مؤشر الإنجاز' : 'Achievement Index'}</div>
+                  <div className="fw-bold" style={{fontSize:'.85rem'}}>{isAr ? 'نسبة التغطية:' : 'Coverage Rate:'} <span className="text-primary">{globalProgress.toFixed(1)}%</span></div>
                 </div>
               </div>
             </div>
@@ -1818,10 +1936,10 @@ function ReportsView({donations, cases, users}) {
       {/* Summary cards */}
       <div className="stats-grid mb-4">
         {[
-          {l:'إجمالي التبرعات (للفترة)',v:`${totalAmt.toLocaleString('ar')} ج.س`,icon:'bi-cash-stack',c:'stat-green'},
-          {l:'عدد العمليات',v:filteredDonations.length,icon:'bi-heart-fill',c:'stat-red'},
-          {l:'تبرعات دورية',v:recurring,icon:'bi-arrow-repeat',c:'stat-purple'},
-          {l:'متوسط التبرع',v:`${avgDonation.toLocaleString('ar', {maximumFractionDigits:0})} ج.س`,icon:'bi-calculator',c:'stat-blue'},
+          {l:isAr?'إجمالي التبرعات (للفترة)':'Total Donations (Period)',v:`${totalAmt.toLocaleString(isAr?'ar':'en')} ${isAr?'ج.س':'SDG'}`,icon:'bi-cash-stack',c:'stat-green'},
+          {l:isAr?'عدد العمليات':'Total Transactions',v:filteredDonations.length,icon:'bi-heart-fill',c:'stat-red'},
+          {l:isAr?'تبرعات دورية':'Recurring Donations',v:recurring,icon:'bi-arrow-repeat',c:'stat-purple'},
+          {l:isAr?'متوسط التبرع':'Average Donation',v:`${avgDonation.toLocaleString(isAr?'ar':'en', {maximumFractionDigits:0})} ${isAr?'ج.س':'SDG'}`,icon:'bi-calculator',c:'stat-blue'},
         ].map((s,i)=>(
           <div className={`stat-card ${s.c}`} key={i} style={{boxShadow:'0 10px 25px rgba(0,0,0,0.04)', border:'1px solid var(--border)', transition:'all 0.3s ease', cursor:'default'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-5px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
             <div className="stat-icon" style={{boxShadow:`0 4px 12px ${i===0?'rgba(16,185,129,0.3)':i===1?'rgba(239,68,68,0.3)':i===2?'rgba(139,92,246,0.3)':'rgba(59,130,246,0.3)'}`}}>
@@ -1841,8 +1959,8 @@ function ReportsView({donations, cases, users}) {
           <div className="card h-100" style={{border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.05)', borderRadius:'16px', overflow:'hidden', transition:'all 0.3s'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-4px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
             <div className="card-header border-0 pb-0 pt-4 px-4 bg-transparent d-flex justify-content-between align-items-center">
               <div>
-                <div style={{fontWeight:800,fontSize:'1rem'}}>التدفق المالي الشهري</div>
-                <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>إجمالي التبرعات (آخر 12 شهر)</div>
+                <div style={{fontWeight:800,fontSize:'1rem'}}>{isAr ? 'التدفق المالي الشهري' : 'Monthly Financial Flow'}</div>
+                <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>{isAr ? 'إجمالي التبرعات (آخر 12 شهر)' : 'Total donations (Last 12 Months)'}</div>
               </div>
               <div style={{width:40,height:40,borderRadius:'50%',background:'rgba(16,185,129,0.1)',color:'#10b981',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="bi bi-bar-chart-steps"></i></div>
             </div>
@@ -1858,8 +1976,8 @@ function ReportsView({donations, cases, users}) {
           <div className="card h-100" style={{border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.05)', borderRadius:'16px', overflow:'hidden', transition:'all 0.3s'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-4px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
             <div className="card-header border-0 pb-0 pt-4 px-4 bg-transparent d-flex justify-content-between align-items-center">
               <div>
-                <div style={{fontWeight:800,fontSize:'1rem'}}>التحليل الفئوي</div>
-                <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>التوزيع المالي حسب تصنيف الحالات</div>
+                <div style={{fontWeight:800,fontSize:'1rem'}}>{isAr ? 'التحليل الفئوي' : 'Category Breakdown'}</div>
+                <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>{isAr ? 'التوزيع المالي حسب تصنيف الحالات' : 'Financial distribution by case category'}</div>
               </div>
               <div style={{width:40,height:40,borderRadius:'50%',background:'rgba(245,158,11,0.1)',color:'#f59e0b',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="bi bi-pie-chart"></i></div>
             </div>
@@ -1876,8 +1994,8 @@ function ReportsView({donations, cases, users}) {
       <div className="card" style={{border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.05)', borderRadius:'16px'}}>
         <div className="card-header border-0 pb-3 pt-4 px-4 d-flex justify-content-between align-items-center bg-transparent">
           <div>
-            <div style={{fontWeight:800,fontSize:'1.1rem'}}>سجل الشرف (أبرز المتبرعين)</div>
-            <div style={{fontSize:'.8rem',color:'var(--text-secondary)'}}>خلال الفترة المحددة ({dateRange==='all'?'الكل':dateRange==='year'?'سنة':dateRange==='month'?'30 يوم':'7 أيام'})</div>
+            <div style={{fontWeight:800,fontSize:'1.1rem'}}>{isAr ? 'سجل الشرف (أبرز المتبرعين)' : 'Honor Roll (Top Donors)'}</div>
+            <div style={{fontSize:'.8rem',color:'var(--text-secondary)'}}>{isAr ? `خلال الفترة المحددة (${dateRange==='all'?'الكل':dateRange==='year'?'سنة':dateRange==='month'?'30 يوم':'7 أيام'})` : `During selected period (${dateRange==='all'?'All':dateRange==='year'?'Year':dateRange==='month'?'30 Days':'7 Days'})`}</div>
           </div>
           <div style={{background:'rgba(245,158,11,0.1)', color:'#f59e0b', width:48, height:48, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center'}}>
             <i className="bi bi-award-fill fs-4"></i>
@@ -1885,7 +2003,7 @@ function ReportsView({donations, cases, users}) {
         </div>
         <div className="card-body px-4 pb-4 pt-0">
           {topDonorsList.length===0
-            ?<Empty icon="bi-heart" title="لا توجد بيانات متبرعين" sub="قم بتغيير نطاق التاريخ أو انتظار تسجيل تبرعات" />
+            ?<Empty icon="bi-heart" title={isAr ? "لا توجد بيانات متبرعين" : "No donor data available"} sub={isAr ? "قم بتغيير نطاق التاريخ أو انتظار تسجيل تبرعات" : "Change date range or await new donations"} />
             :<div className="d-flex flex-column gap-3 mt-3">
               {topDonorsList.map(([name, data],i)=>(
                 <div key={i} className="d-flex align-items-center justify-content-between p-3 rounded-4" style={{background:'var(--bg-input)', border:'1px solid var(--border)', transition:'all 0.3s ease', cursor:'default'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 20px rgba(0,0,0,0.08)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none'}}>
@@ -1900,12 +2018,12 @@ function ReportsView({donations, cases, users}) {
                     </div>
                     <div>
                       <div style={{fontSize:'.85rem',fontWeight:800}}>{name}</div>
-                      <div className="text-xs text-muted">متبرع مميز</div>
+                      <div className="text-xs text-muted">{isAr ? 'متبرع مميز' : 'Top Donor'}</div>
                     </div>
                   </div>
                   <div className="text-end">
-                    <div style={{fontWeight:800, color:'var(--primary-light)', fontSize:'1rem'}}>{data.amt.toLocaleString('ar')} ج.س</div>
-                    <div className="text-xs text-muted">إجمالي المساهمات</div>
+                    <div style={{fontWeight:800, color:'var(--primary-light)', fontSize:'1rem'}}>{data.amt.toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</div>
+                    <div className="text-xs text-muted">{isAr ? 'إجمالي المساهمات' : 'Total Contributions'}</div>
                   </div>
                 </div>
               ))}
@@ -1920,7 +2038,7 @@ function ReportsView({donations, cases, users}) {
 // ══════════════════════════════════════════
 // SHARES VIEW
 // ══════════════════════════════════════════
-function SharesView({shares, cases}) {
+function SharesView({shares, cases, isAr}) {
   const [q,setQ]=useState('');
   const filt=shares.filter(s=>!q||[s.caseTitle,s.platform,s.userId].join(' ').toLowerCase().includes(q.toLowerCase()));
 
@@ -1945,7 +2063,7 @@ function SharesView({shares, cases}) {
           <div className="stat-icon"><i className="bi bi-share-fill"></i></div>
           <div>
             <div className="stat-value">{shares.length}</div>
-            <div className="stat-label">إجمالي المشاركات</div>
+            <div className="stat-label">{isAr ? 'إجمالي المشاركات' : 'Total Shares'}</div>
           </div>
         </div>
       </div>
@@ -1953,17 +2071,17 @@ function SharesView({shares, cases}) {
       <div className="d-flex gap-2 mb-3">
         <div className="search-wrap flex-fill" style={{maxWidth:340}}>
           <i className="bi bi-search search-icon"></i>
-          <input className="search-input" placeholder="بحث في المشاركات..." value={q} onChange={e=>setQ(e.target.value)} />
+          <input className="search-input" placeholder={isAr ? "بحث في المشاركات..." : "Search shares..."} value={q} onChange={e=>setQ(e.target.value)} />
         </div>
       </div>
 
       <div className="card">
         <div className="table-wrapper">
           <table className="table">
-            <thead><tr><th>الحملة</th><th>المنصة</th><th>المستخدم</th><th>الوقت</th></tr></thead>
+            <thead><tr><th>{isAr ? 'الحملة' : 'Campaign'}</th><th>{isAr ? 'المنصة' : 'Platform'}</th><th>{isAr ? 'المستخدم' : 'User'}</th><th>{isAr ? 'الوقت' : 'Time'}</th></tr></thead>
             <tbody>
               {filt.length===0
-                ?<tr><td colSpan={4}><Empty icon="bi-share" title="لا توجد مشاركات بعد" sub="ستظهر هنا مشاركات الحملات من التطبيق" /></td></tr>
+                ?<tr><td colSpan={4}><Empty icon="bi-share" title={isAr ? "لا توجد مشاركات بعد" : "No shares yet"} sub={isAr ? "ستظهر هنا مشاركات الحملات من التطبيق" : "Campaign shares from app will appear here"} /></td></tr>
                 :filt.map(s=>(
                   <tr key={s.id}>
                     <td style={{fontWeight:600,fontSize:'.78rem'}}>{s.caseTitle||s.caseId||'—'}</td>
@@ -1974,7 +2092,7 @@ function SharesView({shares, cases}) {
                     </td>
                     <td style={{fontSize:'.71rem',color:'var(--text-secondary)'}}>{s.userId?.slice(0,8)}...</td>
                     <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>
-                      {s.timestamp?new Date(s.timestamp).toLocaleDateString('ar-SA'):'—'}
+                      {s.timestamp?new Date(s.timestamp).toLocaleDateString(isAr?'ar-SA':'en-US'):'—'}
                     </td>
                   </tr>
                 ))
@@ -1990,7 +2108,7 @@ function SharesView({shares, cases}) {
 // ══════════════════════════════════════════
 // VOLUNTEER ASSIGNMENT MODAL
 // ══════════════════════════════════════════
-function AssignVolunteerModal({caseItem, users, onClose}) {
+function AssignVolunteerModal({caseItem, users, onClose, isAr}) {
   const volunteers = users.filter(u => u.role === 'volunteer' && u.status !== 'suspended');
   const [selectedVolId, setSelectedVolId] = useState(caseItem.volunteerId || '');
   const [saving, setSaving] = useState(false);
@@ -2005,31 +2123,31 @@ function AssignVolunteerModal({caseItem, users, onClose}) {
         assignedAt: selectedVolId ? serverTimestamp() : null,
         updatedAt: serverTimestamp()
       });
-      showToast('success', 'تم التعيين', 'تم تحديث المتطوع المعين للحالة');
+      showToast('success', isAr ? 'تم التعيين' : 'Assigned', isAr ? 'تم تحديث المتطوع المعين للحالة' : 'Volunteer assigned successfully');
       onClose();
     } catch(e) {
-      showToast('error', 'خطأ', e.message);
+      showToast('error', isAr ? 'خطأ' : 'Error', e.message);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal title="تعيين متطوع للحالة" icon="bi-person-check-fill" onClose={onClose}
+    <Modal title={isAr ? "تعيين متطوع للحالة" : "Assign Volunteer to Case"} icon="bi-person-check-fill" onClose={onClose}
       footer={<>
-        <button className="btn btn-outline" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-outline" onClick={onClose}>{isAr ? 'إلغاء' : 'Cancel'}</button>
         <button className="btn btn-primary" onClick={save} disabled={saving}>
-          {saving ? 'جاري الحفظ...' : 'حفظ التعيين'}
+          {saving ? (isAr ? 'جاري الحفظ...' : 'Saving...') : (isAr ? 'حفظ التعيين' : 'Save Assignment')}
         </button>
       </>}>
       <div className="mb-3">
-        <label className="form-label">الحالة المستهدفة</label>
+        <label className="form-label">{isAr ? "الحالة المستهدفة" : "Target Case"}</label>
         <div className="form-input" style={{background:'rgba(255,255,255,0.03)'}}>{caseItem.title}</div>
       </div>
       <div className="mb-3">
-        <label className="form-label">اختر متطوعاً</label>
+        <label className="form-label">{isAr ? "اختر متطوعاً" : "Select Volunteer"}</label>
         <select className="form-input" value={selectedVolId} onChange={e => setSelectedVolId(e.target.value)}>
-          <option value="">-- إلغاء تعيين المتطوع --</option>
+          <option value="">-- {isAr ? 'إلغاء تعيين المتطوع' : 'Unassign Volunteer'} --</option>
           {volunteers.map(v => (
             <option key={v.id} value={v.id || v.uid}>{v.name} ({v.email})</option>
           ))}
@@ -2038,7 +2156,7 @@ function AssignVolunteerModal({caseItem, users, onClose}) {
       {volunteers.length === 0 && (
         <div style={{color:'var(--gold)', fontSize:'0.8rem', marginTop:'8px'}}>
           <i className="bi bi-exclamation-triangle-fill me-1"></i>
-          لا يوجد متطوعين نشطين مسجلين في النظام حالياً.
+          {isAr ? 'لا يوجد متطوعين نشطين مسجلين في النظام حالياً.' : 'No active volunteers registered in the system currently.'}
         </div>
       )}
     </Modal>
@@ -2048,44 +2166,51 @@ function AssignVolunteerModal({caseItem, users, onClose}) {
 // ══════════════════════════════════════════
 // VERIFICATIONS VIEW — Admin: Review identity docs
 // ══════════════════════════════════════════
-function VerificationsView({verifications, doDelVerification}) {
+// ══════════════════════════════════════════
+// VERIFICATIONS VIEW — Admin: Review identity docs
+// ══════════════════════════════════════════
+function VerificationsView({verifications, doDelVerification, isAr}) {
   const [filter,setFilter] = useState('pending');
   const [selected,setSelected] = useState(null);
   const [adminNote,setAdminNote] = useState('');
   const [saving,setSaving] = useState(false);
 
-  const DOC_LABELS = {
+  const DOC_LABELS = isAr ? {
     national_id: 'بطاقة وطنية',
     passport: 'جواز سفر',
     driving_license: 'رخصة قيادة',
     birth_cert: 'شهادة ميلاد',
+  } : {
+    national_id: 'National ID',
+    passport: 'Passport',
+    driving_license: 'Driving License',
+    birth_cert: 'Birth Certificate',
   };
-  const ROLE_LABELS = { beneficiary: 'مستفيد', volunteer: 'متطوع' };
+  const ROLE_LABELS = isAr 
+    ? { beneficiary: 'مستفيد', volunteer: 'متطوع' }
+    : { beneficiary: 'Beneficiary', volunteer: 'Volunteer' };
 
   const filtered = verifications.filter(v => filter === 'all' || v.verificationStatus === filter);
-  const pendingCount = verifications.filter(v => v.verificationStatus === 'pending').length;
 
   const doVerify = async (v, decision) => {
-    const label = decision === 'approved' ? 'قبول' : 'رفض';
-    if (!await showConfirm(`${label} الهوية`, `${label} طلب التحقق من هوية "${v.name}"؟`, decision === 'approved' ? '✅' : '❌')) return;
+    const label = decision === 'approved' ? (isAr ? 'قبول' : 'Accept') : (isAr ? 'رفض' : 'Reject');
+    if (!await showConfirm(isAr ? `${label} الهوية` : `${label} Identity`, isAr ? `${label} طلب التحقق من هوية "${v.name}"؟` : `${label} verification request for "${v.name}"?`, decision === 'approved' ? '✅' : '❌')) return;
     setSaving(true);
     try {
-      // Update verification record
       await updateDoc(doc(db, 'identity_verifications', v.id), {
         verificationStatus: decision,
         adminNote: adminNote,
         reviewedAt: serverTimestamp(),
       });
-      // Update user status
       const newUserStatus = decision === 'approved' ? 'active' : 'rejected';
       await updateDoc(doc(db, 'users', v.uid), {
         status: newUserStatus,
         verificationStatus: decision,
       });
-      showToast('success', `تم ${label} طلب التحقق من هوية "${v.name}"`);
+      showToast('success', isAr ? `تم ${label} طلب التحقق من هوية "${v.name}"` : `Verification request for "${v.name}" was ${label.toLowerCase()}ed`);
       setSelected(null);
       setAdminNote('');
-    } catch(e) { showToast('error', 'خطأ', e.message); }
+    } catch(e) { showToast('error', isAr ? 'خطأ' : 'Error', e.message); }
     finally { setSaving(false); }
   };
 
@@ -2094,9 +2219,9 @@ function VerificationsView({verifications, doDelVerification}) {
       {/* Stats */}
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
         {[
-          {l:'في الانتظار', v:verifications.filter(v=>v.verificationStatus==='pending').length, c:'stat-gold', i:'bi-hourglass-split'},
-          {l:'مقبولة',      v:verifications.filter(v=>v.verificationStatus==='approved').length, c:'stat-green', i:'bi-shield-check'},
-          {l:'مرفوضة',     v:verifications.filter(v=>v.verificationStatus==='rejected').length, c:'stat-red',  i:'bi-shield-x'},
+          {l:isAr?'في الانتظار':'Pending', v:verifications.filter(v=>v.verificationStatus==='pending').length, c:'stat-gold', i:'bi-hourglass-split'},
+          {l:isAr?'مقبولة':'Approved',      v:verifications.filter(v=>v.verificationStatus==='approved').length, c:'stat-green', i:'bi-shield-check'},
+          {l:isAr?'مرفوضة':'Rejected',     v:verifications.filter(v=>v.verificationStatus==='rejected').length, c:'stat-red',  i:'bi-shield-x'},
         ].map((s,i) => (
           <div className={`stat-card ${s.c}`} key={i}>
             <div className="stat-icon"><i className={`bi ${s.i}`}></i></div>
@@ -2107,20 +2232,20 @@ function VerificationsView({verifications, doDelVerification}) {
 
       {/* Filter tabs */}
       <div className="d-flex gap-2 mb-4 flex-wrap">
-        {[['all','الكل'],['pending','معلق'],['approved','مقبول'],['rejected','مرفوض']].map(([v,l])=>(
+        {[['all',isAr?'الكل':'All'],['pending',isAr?'معلق':'Pending'],['approved',isAr?'مقبول':'Approved'],['rejected',isAr?'مرفوض':'Rejected']].map(([v,l])=>(
           <button key={v} className={`btn btn-sm ${filter===v?'btn-primary':'btn-outline'}`} onClick={()=>setFilter(v)}>{l}</button>
         ))}
       </div>
 
       {/* List */}
       {filtered.length === 0
-        ? <div className="card"><Empty icon="bi-shield-check" title="لا توجد طلبات" sub="لا توجد طلبات تحقق بهذه الحالة" /></div>
+        ? <div className="card"><Empty icon="bi-shield-check" title={isAr ? "لا توجد طلبات" : "No requests"} sub={isAr ? "لا توجد طلبات تحقق بهذه الحالة" : "No verification requests under this status"} /></div>
         : <div className="row g-3">
             {filtered.map(v => {
               const statusMap = {
-                pending:  {c:'badge-pending',  l:'معلق',   i:'bi-hourglass-split'},
-                approved: {c:'badge-approved', l:'مقبول',  i:'bi-check-circle-fill'},
-                rejected: {c:'badge-rejected', l:'مرفوض', i:'bi-x-circle-fill'},
+                pending:  {c:'badge-pending',  l:isAr?'معلق':'Pending',   i:'bi-hourglass-split'},
+                approved: {c:'badge-approved', l:isAr?'مقبول':'Approved',  i:'bi-check-circle-fill'},
+                rejected: {c:'badge-rejected', l:isAr?'مرفوض':'Rejected', i:'bi-x-circle-fill'},
               };
               const st = statusMap[v.verificationStatus] || statusMap.pending;
               return (
@@ -2150,8 +2275,8 @@ function VerificationsView({verifications, doDelVerification}) {
                       <div className="d-flex align-items-center justify-content-between mt-3 pt-3" style={{borderTop:'1px solid var(--border)'}}>
                         <div className="text-xs text-muted">{timeAgo(v.submittedAt)}</div>
                         <div className="d-flex gap-2" onClick={e=>e.stopPropagation()}>
-                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}} title="معاينة وتعديل"><i className="bi bi-pencil"></i></button>
-                          <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelVerification(v.id, v.name)} title="حذف الطلب"><i className="bi bi-trash"></i></button>
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}} title={isAr ? "معاينة وتعديل" : "Preview & Edit"}><i className="bi bi-pencil"></i></button>
+                          <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelVerification(v.id, v.name)} title={isAr ? "حذف الطلب" : "Delete Request"}><i className="bi bi-trash"></i></button>
                         </div>
                       </div>
                     </div>
@@ -2164,30 +2289,30 @@ function VerificationsView({verifications, doDelVerification}) {
 
       {/* Detail Modal */}
       {selected && (
-        <Modal title="تفاصيل طلب التحقق" icon="bi-shield-check" onClose={()=>{setSelected(null);setAdminNote('');}}
+        <Modal title={isAr ? "تفاصيل طلب التحقق" : "Verification Request Details"} icon="bi-shield-check" onClose={()=>{setSelected(null);setAdminNote('');}}
           footer={
             <>
-              <button className="btn btn-outline" onClick={()=>{setSelected(null);setAdminNote('');}}>إغلاق</button>
-              <button className="btn btn-reject" onClick={()=>doVerify(selected,'rejected')} disabled={saving || selected.verificationStatus==='rejected'}><i className="bi bi-x-lg"></i>رفض الطلب</button>
-              <button className="btn btn-approve" onClick={()=>doVerify(selected,'approved')} disabled={saving || selected.verificationStatus==='approved'}><i className="bi bi-check-lg"></i>تأكيد وموافقة</button>
-              <button className="btn btn-outline" style={{color:'var(--red)',borderColor:'var(--red)'}} onClick={()=>{doDelVerification(selected.id, selected.name);setSelected(null);setAdminNote('');}}><i className="bi bi-trash"></i>حذف الطلب</button>
+              <button className="btn btn-outline" onClick={()=>{setSelected(null);setAdminNote('');}}>{isAr ? 'إغلاق' : 'Close'}</button>
+              <button className="btn btn-reject" onClick={()=>doVerify(selected,'rejected')} disabled={saving || selected.verificationStatus==='rejected'}><i className="bi bi-x-lg"></i>{isAr ? 'رفض الطلب' : 'Reject Request'}</button>
+              <button className="btn btn-approve" onClick={()=>doVerify(selected,'approved')} disabled={saving || selected.verificationStatus==='approved'}><i className="bi bi-check-lg"></i>{isAr ? 'تأكيد وموافقة' : 'Approve Request'}</button>
+              <button className="btn btn-outline" style={{color:'var(--red)',borderColor:'var(--red)'}} onClick={()=>{doDelVerification(selected.id, selected.name);setSelected(null);setAdminNote('');}}><i className="bi bi-trash"></i>{isAr ? 'حذف الطلب' : 'Delete Request'}</button>
             </>
           }
         >
           <div className="row g-3">
-            <div className="col-md-6"><div className="modal-label">الاسم</div><div className="bold">{selected.name}</div></div>
-            <div className="col-md-6"><div className="modal-label">البريد</div><div>{selected.email}</div></div>
-            <div className="col-md-6"><div className="modal-label">الدور</div><span className="badge badge-supervisor">{ROLE_LABELS[selected.role]||selected.role}</span></div>
-            <div className="col-md-6"><div className="modal-label">نوع الوثيقة</div><div>{DOC_LABELS[selected.docType]||selected.docType}</div></div>
-            <div className="col-md-6"><div className="modal-label">رقم الوثيقة</div><div className="bold">{selected.docNumber}</div></div>
-            <div className="col-md-6"><div className="modal-label">البلد</div><div>{selected.docCountry||'—'}</div></div>
-            {selected.docExpiry && <div className="col-md-6"><div className="modal-label">تاريخ الانتهاء</div><div>{selected.docExpiry}</div></div>}
-            {selected.reason && <div className="col-12"><div className="modal-label">السبب / المهارات</div><div style={{lineHeight:1.7}}>{selected.reason}</div></div>}
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'الاسم' : 'Name'}</div><div className="bold">{selected.name}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'البريد' : 'Email'}</div><div>{selected.email}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'الدور' : 'Role'}</div><span className="badge badge-supervisor">{ROLE_LABELS[selected.role]||selected.role}</span></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'نوع الوثيقة' : 'Document Type'}</div><div>{DOC_LABELS[selected.docType]||selected.docType}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'رقم الوثيقة' : 'Document Number'}</div><div className="bold">{selected.docNumber}</div></div>
+            <div className="col-md-6"><div className="modal-label">{isAr ? 'البلد' : 'Country'}</div><div>{selected.docCountry||'—'}</div></div>
+            {selected.docExpiry && <div className="col-md-6"><div className="modal-label">{isAr ? 'تاريخ الانتهاء' : 'Expiry Date'}</div><div>{selected.docExpiry}</div></div>}
+            {selected.reason && <div className="col-12"><div className="modal-label">{isAr ? 'السبب / المهارات' : 'Reason / Skills'}</div><div style={{lineHeight:1.7}}>{selected.reason}</div></div>}
 
             {/* Document Images */}
             {selected.docFrontURL && (
               <div className="col-md-6">
-                <div className="modal-label">صورة الوجه الأمامي</div>
+                <div className="modal-label">{isAr ? 'صورة الوجه الأمامي' : 'Front Image'}</div>
                 <a href={selected.docFrontURL} target="_blank" rel="noopener noreferrer">
                   <img src={selected.docFrontURL} alt="الوجه الأمامي" style={{width:'100%',borderRadius:8,border:'1px solid var(--border)',marginTop:4,cursor:'zoom-in'}} />
                 </a>
@@ -2195,7 +2320,7 @@ function VerificationsView({verifications, doDelVerification}) {
             )}
             {selected.docBackURL && (
               <div className="col-md-6">
-                <div className="modal-label">صورة الوجه الخلفي</div>
+                <div className="modal-label">{isAr ? 'صورة الوجه الخلفي' : 'Back Image'}</div>
                 <a href={selected.docBackURL} target="_blank" rel="noopener noreferrer">
                   <img src={selected.docBackURL} alt="الوجه الخلفي" style={{width:'100%',borderRadius:8,border:'1px solid var(--border)',marginTop:4,cursor:'zoom-in'}} />
                 </a>
@@ -2204,9 +2329,9 @@ function VerificationsView({verifications, doDelVerification}) {
 
             {selected.verificationStatus === 'pending' || true ? (
               <div className="col-12">
-                <div className="modal-label">ملاحظة المدير / سبب القبول أو الرفض (اختياري)</div>
+                <div className="modal-label">{isAr ? 'ملاحظة المدير / سبب القبول أو الرفض (اختياري)' : 'Admin Notes / Reason (Optional)'}</div>
                 <textarea className="form-input" rows={2} value={adminNote} onChange={e=>setAdminNote(e.target.value)}
-                  placeholder="سبب القبول أو الرفض..." style={{resize:'vertical'}} />
+                  placeholder={isAr ? "سبب القبول أو الرفض..." : "Approval or rejection note..."} style={{resize:'vertical'}} />
               </div>
             ) : null}
           </div>
@@ -2219,35 +2344,35 @@ function VerificationsView({verifications, doDelVerification}) {
 // ══════════════════════════════════════════
 // ACTIVITY VIEW
 // ══════════════════════════════════════════
-function ActivityView({logs, doDelLog, doClearLogs}) {
+function ActivityView({logs, doDelLog, doClearLogs, isAr}) {
   return (
     <div>
       <div className="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-3">
         <div className="d-flex align-items-center gap-3">
           <div className="stat-icon" style={{background:'rgba(102,187,106,0.15)',color:'var(--primary)',width:40,height:40,borderRadius:12,fontSize:'1.1rem'}}><i className="bi bi-clock-history"></i></div>
           <div>
-            <div className="bold" style={{fontSize:'.87rem'}}>سجل العمليات</div>
-            <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>تتبع حركات ومسؤوليات النظام</div>
+            <div className="bold" style={{fontSize:'.87rem'}}>{isAr ? 'سجل العمليات' : 'Activity Log'}</div>
+            <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>{isAr ? 'تتبع حركات ومسؤوليات النظام' : 'Track system actions and audit trail'}</div>
           </div>
         </div>
         {logs.length > 0 && (
           <button className="btn btn-outline" style={{borderColor:'rgba(239,83,80,0.5)',color:'var(--red)'}} onClick={doClearLogs}>
-            <i className="bi bi-trash-fill me-1"></i>مسح السجل بالكامل
+            <i className="bi bi-trash-fill me-1"></i>{isAr ? 'مسح السجل بالكامل' : 'Clear All Logs'}
           </button>
         )}
       </div>
       <div className="card p-0">
         <div className="card-body p-0">
-          {logs.length===0 ? <Empty icon="bi-clock" title="لا توجد عمليات مسجلة" sub="لم يتم إجراء أي نشاطات بعد" /> : (
+          {logs.length===0 ? <Empty icon="bi-clock" title={isAr ? "لا توجد عمليات مسجلة" : "No activity logged"} sub={isAr ? "لم يتم إجراء أي نشاطات بعد" : "No activities performed yet"} /> : (
             <div className="table-responsive">
               <table className="table table-hover align-middle mb-0" style={{fontSize:'.8rem'}}>
                 <thead>
                   <tr>
-                    <th>المسؤول</th>
-                    <th>العملية</th>
-                    <th>التفاصيل</th>
-                    <th>التاريخ والوقت</th>
-                    <th style={{width:60}}>إجراء</th>
+                    <th>{isAr ? 'المسؤول' : 'Admin'}</th>
+                    <th>{isAr ? 'العملية' : 'Action'}</th>
+                    <th>{isAr ? 'التفاصيل' : 'Details'}</th>
+                    <th>{isAr ? 'التاريخ والوقت' : 'Date & Time'}</th>
+                    <th style={{width:60}}>{isAr ? 'إجراء' : 'Action'}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2258,7 +2383,7 @@ function ActivityView({logs, doDelLog, doClearLogs}) {
                       <td style={{maxWidth:250,whiteSpace:'normal'}}>{log.details}</td>
                       <td className="text-muted" style={{minWidth:120}}>{log.timestamp ? formatDate(log.timestamp.toDate(),true) : '—'}</td>
                       <td>
-                        <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelLog(log.id)} title="حذف السجل">
+                        <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelLog(log.id)} title={isAr ? "حذف السجل" : "Delete Log"}>
                           <i className="bi bi-trash"></i>
                         </button>
                       </td>
@@ -2277,7 +2402,7 @@ function ActivityView({logs, doDelLog, doClearLogs}) {
 // ══════════════════════════════════════════
 // SETTINGS VIEW
 // ══════════════════════════════════════════
-function SettingsView({sysSettings, logActivity, cases, users, donations, activityLogs}) {
+function SettingsView({sysSettings, logActivity, cases, users, donations, activityLogs, isAr}) {
   const [f,setF]=useState({
     force_app_update: sysSettings?.force_app_update || false,
     min_app_version: sysSettings?.min_app_version || '1.0.0',
@@ -2292,7 +2417,7 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
     twitter_url: sysSettings?.twitter_url || '',
     instagram_url: sysSettings?.instagram_url || '',
 
-    bank_name: sysSettings?.bank_name || 'بنك الخرطوم',
+    bank_name: sysSettings?.bank_name || (isAr ? 'بنك الخرطوم' : 'Bank of Khartoum'),
     bank_account: sysSettings?.bank_account || '',
     bank_holder: sysSettings?.bank_holder || '',
 
@@ -2318,7 +2443,7 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         twitter_url: sysSettings.twitter_url || '',
         instagram_url: sysSettings.instagram_url || '',
     
-        bank_name: sysSettings.bank_name || 'بنك الخرطوم',
+        bank_name: sysSettings.bank_name || (isAr ? 'بنك الخرطوم' : 'Bank of Khartoum'),
         bank_account: sysSettings.bank_account || '',
         bank_holder: sysSettings.bank_holder || '',
     
@@ -2327,15 +2452,15 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         terms_url: sysSettings.terms_url || ''
       });
     }
-  },[sysSettings]);
+  },[sysSettings, isAr]);
 
   const save = async()=>{
     setSaving(true);
     try {
       await setDoc(doc(db,'settings','general'), f, {merge:true});
-      if(logActivity) logActivity('تحديث الإعدادات', 'تم تحديث إعدادات النظام العامة والموقع');
-      showToast('success','تم الحفظ','تم تحديث إعدادات النظام بنجاح');
-    }catch(e){showToast('error','خطأ',e.message)}finally{setSaving(false)}
+      if(logActivity) logActivity(isAr ? 'تحديث الإعدادات' : 'Update Settings', isAr ? 'تم تحديث إعدادات النظام العامة والموقع' : 'System and site settings updated');
+      showToast('success', isAr ? 'تم الحفظ' : 'Saved', isAr ? 'تم تحديث إعدادات النظام بنجاح' : 'System settings updated successfully');
+    }catch(e){showToast('error', isAr ? 'خطأ' : 'Error', e.message)}finally{setSaving(false)}
   };
 
   const up = k => e => setF(p=>({...p, [k]: e.target.type==='checkbox'?e.target.checked:e.target.value}));
@@ -2345,8 +2470,8 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
       <div className="d-flex align-items-center gap-3 mb-4">
         <div className="stat-icon" style={{background:'rgba(239,83,80,0.15)',color:'var(--red)',width:40,height:40,borderRadius:12,fontSize:'1.1rem'}}><i className="bi bi-gear-fill"></i></div>
         <div>
-          <div className="bold" style={{fontSize:'.87rem'}}>إعدادات النظام الشاملة</div>
-          <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>التحكم الكامل في إعدادات التطبيق والموقع وحسابات الجمعية</div>
+          <div className="bold" style={{fontSize:'.87rem'}}>{isAr ? 'إعدادات النظام الشاملة' : 'System Settings'}</div>
+          <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>{isAr ? 'التحكم الكامل في إعدادات التطبيق والموقع وحسابات الجمعية' : 'Full control over app, site, and organization settings'}</div>
         </div>
       </div>
       
@@ -2354,22 +2479,22 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         {/* التطبيق */}
         <div className="col-md-6">
           <div className="card h-100">
-            <div className="card-header"><div className="bold"><i className="bi bi-phone me-2 text-primary"></i>تطبيق الأندرويد</div></div>
+            <div className="card-header"><div className="bold"><i className="bi bi-phone me-2 text-primary"></i>{isAr ? 'تطبيق الأندرويد' : 'Android App'}</div></div>
             <div className="card-body">
               <div className="form-check form-switch mb-3">
                 <input className="form-check-input" type="checkbox" checked={f.app_maintenance_mode} onChange={up('app_maintenance_mode')} />
-                <label className="form-check-label bold text-danger">تفعيل وضع الصيانة (إيقاف التطبيق)</label>
+                <label className="form-check-label bold text-danger">{isAr ? 'تفعيل وضع الصيانة (إيقاف التطبيق)' : 'Enable Maintenance Mode (Disable App)'}</label>
               </div>
               <div className="form-check form-switch mb-3">
                 <input className="form-check-input" type="checkbox" checked={f.force_app_update} onChange={up('force_app_update')} />
-                <label className="form-check-label bold text-warning">إجبار المستخدمين على التحديث</label>
+                <label className="form-check-label bold text-warning">{isAr ? 'إجبار المستخدمين على التحديث' : 'Force App Update'}</label>
               </div>
               <div className="form-group mb-3">
-                <label className="form-label">رقم الإصدار الأدنى المقبول (مثل: 1.0.5)</label>
+                <label className="form-label">{isAr ? 'رقم الإصدار الأدنى المقبول (مثل: 1.0.5)' : 'Minimum Required Version (e.g. 1.0.5)'}</label>
                 <input className="form-input" value={f.min_app_version} onChange={up('min_app_version')} placeholder="1.0.0" />
               </div>
               <div className="form-group mb-0">
-                <label className="form-label">رابط التطبيق على Google Play</label>
+                <label className="form-label">{isAr ? 'رابط التطبيق على Google Play' : 'Google Play Store Link'}</label>
                 <input className="form-input" value={f.play_store_link} onChange={up('play_store_link')} placeholder="https://play.google.com/store/apps/details?id=..." dir="ltr" style={{textAlign:'left'}} />
               </div>
             </div>
@@ -2379,18 +2504,18 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         {/* الموقع والتواصل */}
         <div className="col-md-6">
           <div className="card h-100">
-            <div className="card-header"><div className="bold"><i className="bi bi-globe me-2 text-primary"></i>الموقع الإلكتروني والمنصة</div></div>
+            <div className="card-header"><div className="bold"><i className="bi bi-globe me-2 text-primary"></i>{isAr ? 'الموقع الإلكتروني والمنصة' : 'Website & Platform'}</div></div>
             <div className="card-body">
               <div className="form-check form-switch mb-3">
                 <input className="form-check-input" type="checkbox" checked={f.web_maintenance_mode} onChange={up('web_maintenance_mode')} />
-                <label className="form-check-label bold text-danger">تفعيل وضع الصيانة للموقع</label>
+                <label className="form-check-label bold text-danger">{isAr ? 'تفعيل وضع الصيانة للموقع' : 'Enable Web Maintenance Mode'}</label>
               </div>
               <div className="form-group mb-3">
-                <label className="form-label">البريد الإلكتروني للتواصل</label>
+                <label className="form-label">{isAr ? 'البريد الإلكتروني للتواصل' : 'Contact Email'}</label>
                 <input className="form-input" type="email" value={f.contact_email} onChange={up('contact_email')} placeholder="info@takaful.com" dir="ltr" style={{textAlign:'left'}} />
               </div>
               <div className="form-group mb-0">
-                <label className="form-label">رقم هاتف التواصل (واتساب)</label>
+                <label className="form-label">{isAr ? 'رقم هاتف التواصل (واتساب)' : 'Contact Phone (WhatsApp)'}</label>
                 <input className="form-input" value={f.contact_phone} onChange={up('contact_phone')} placeholder="+249..." dir="ltr" style={{textAlign:'left'}} />
               </div>
             </div>
@@ -2400,18 +2525,18 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         {/* وسائل التواصل الاجتماعي */}
         <div className="col-md-6">
           <div className="card h-100">
-            <div className="card-header"><div className="bold"><i className="bi bi-share me-2" style={{color:'#8b5cf6'}}></i>وسائل التواصل الاجتماعي</div></div>
+            <div className="card-header"><div className="bold"><i className="bi bi-share me-2" style={{color:'#8b5cf6'}}></i>{isAr ? 'وسائل التواصل الاجتماعي' : 'Social Media Links'}</div></div>
             <div className="card-body">
               <div className="form-group mb-3">
-                <label className="form-label"><i className="bi bi-facebook me-1 text-primary"></i> رابط فيسبوك</label>
+                <label className="form-label"><i className="bi bi-facebook me-1 text-primary"></i> {isAr ? 'رابط فيسبوك' : 'Facebook Link'}</label>
                 <input className="form-input" value={f.facebook_url} onChange={up('facebook_url')} placeholder="https://facebook.com/..." dir="ltr" style={{textAlign:'left'}} />
               </div>
               <div className="form-group mb-3">
-                <label className="form-label"><i className="bi bi-twitter-x me-1"></i> رابط منصة X</label>
+                <label className="form-label"><i className="bi bi-twitter-x me-1"></i> {isAr ? 'رابط منصة X' : 'X (Twitter) Link'}</label>
                 <input className="form-input" value={f.twitter_url} onChange={up('twitter_url')} placeholder="https://x.com/..." dir="ltr" style={{textAlign:'left'}} />
               </div>
               <div className="form-group mb-0">
-                <label className="form-label"><i className="bi bi-instagram me-1" style={{color:'#e1306c'}}></i> رابط إنستغرام</label>
+                <label className="form-label"><i className="bi bi-instagram me-1" style={{color:'#e1306c'}}></i> {isAr ? 'رابط إنستغرام' : 'Instagram Link'}</label>
                 <input className="form-input" value={f.instagram_url} onChange={up('instagram_url')} placeholder="https://instagram.com/..." dir="ltr" style={{textAlign:'left'}} />
               </div>
             </div>
@@ -2421,19 +2546,19 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         {/* الحسابات البنكية للتبرع */}
         <div className="col-md-6">
           <div className="card h-100">
-            <div className="card-header"><div className="bold"><i className="bi bi-bank me-2 text-success"></i>الحساب البنكي الرئيسي للتبرعات</div></div>
+            <div className="card-header"><div className="bold"><i className="bi bi-bank me-2 text-success"></i>{isAr ? 'الحساب البنكي الرئيسي للتبرعات' : 'Main Bank Account for Donations'}</div></div>
             <div className="card-body">
               <div className="form-group mb-3">
-                <label className="form-label">اسم البنك / المحفظة</label>
-                <input className="form-input" value={f.bank_name} onChange={up('bank_name')} placeholder="مثال: بنك الخرطوم (بنكك)" />
+                <label className="form-label">{isAr ? 'اسم البنك / المحفظة' : 'Bank / Wallet Name'}</label>
+                <input className="form-input" value={f.bank_name} onChange={up('bank_name')} placeholder={isAr ? "مثال: بنك الخرطوم (بنكك)" : "e.g. Bank of Khartoum"} />
               </div>
               <div className="form-group mb-3">
-                <label className="form-label">رقم الحساب أو رقم المحفظة</label>
-                <input className="form-input" value={f.bank_account} onChange={up('bank_account')} placeholder="أدخل رقم الحساب هنا" dir="ltr" style={{textAlign:'left'}} />
+                <label className="form-label">{isAr ? 'رقم الحساب أو رقم المحفظة' : 'Account / Wallet Number'}</label>
+                <input className="form-input" value={f.bank_account} onChange={up('bank_account')} placeholder={isAr ? "أدخل رقم الحساب هنا" : "Enter account number"} dir="ltr" style={{textAlign:'left'}} />
               </div>
               <div className="form-group mb-0">
-                <label className="form-label">اسم صاحب الحساب (المسجل)</label>
-                <input className="form-input" value={f.bank_holder} onChange={up('bank_holder')} placeholder="اسم المستفيد أو الجمعية" />
+                <label className="form-label">{isAr ? 'اسم صاحب الحساب (المسجل)' : 'Account Holder Name'}</label>
+                <input className="form-input" value={f.bank_holder} onChange={up('bank_holder')} placeholder={isAr ? "اسم المستفيد أو الجمعية" : "Beneficiary or Organization Name"} />
               </div>
             </div>
           </div>
@@ -2442,18 +2567,18 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         {/* معلومات الجمعية والروابط */}
         <div className="col-12">
           <div className="card">
-            <div className="card-header"><div className="bold"><i className="bi bi-info-circle me-2 text-primary"></i>نبذة وروابط قانونية</div></div>
+            <div className="card-header"><div className="bold"><i className="bi bi-info-circle me-2 text-primary"></i>{isAr ? 'نبذة وروابط قانونية' : 'About & Legal Links'}</div></div>
             <div className="card-body row g-3">
               <div className="col-md-12">
-                <label className="form-label">نبذة عن الجمعية (About Us)</label>
-                <textarea className="form-input" rows={4} value={f.about_us_text} onChange={up('about_us_text')} placeholder="أدخل النبذة التعريفية هنا لتظهر في التطبيق والموقع..."></textarea>
+                <label className="form-label">{isAr ? 'نبذة عن الجمعية (About Us)' : 'About Organization (About Us)'}</label>
+                <textarea className="form-input" rows={4} value={f.about_us_text} onChange={up('about_us_text')} placeholder={isAr ? "أدخل النبذة التعريفية هنا لتظهر في التطبيق والموقع..." : "Enter organization description for app and website..."}></textarea>
               </div>
               <div className="col-md-6">
-                <label className="form-label">رابط سياسة الخصوصية (Privacy Policy)</label>
+                <label className="form-label">{isAr ? 'رابط سياسة الخصوصية (Privacy Policy)' : 'Privacy Policy Link'}</label>
                 <input className="form-input" value={f.privacy_policy_url} onChange={up('privacy_policy_url')} placeholder="https://..." dir="ltr" style={{textAlign:'left'}} />
               </div>
               <div className="col-md-6">
-                <label className="form-label">رابط الشروط والأحكام (Terms of Service)</label>
+                <label className="form-label">{isAr ? 'رابط الشروط والأحكام (Terms of Service)' : 'Terms of Service Link'}</label>
                 <input className="form-input" value={f.terms_url} onChange={up('terms_url')} placeholder="https://..." dir="ltr" style={{textAlign:'left'}} />
               </div>
             </div>
@@ -2463,9 +2588,9 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         {/* النسخ الاحتياطي وتصدير البيانات */}
         <div className="col-12">
           <div className="card">
-            <div className="card-header"><div className="bold"><i className="bi bi-cloud-arrow-down me-2 text-primary"></i>النسخ الاحتياطي وتصدير البيانات</div></div>
+            <div className="card-header"><div className="bold"><i className="bi bi-cloud-arrow-down me-2 text-primary"></i>{isAr ? 'النسخ الاحتياطي وتصدير البيانات' : 'Data Backup & Export'}</div></div>
             <div className="card-body">
-              <p className="text-muted small mb-3">يمكنك أخذ نسخة احتياطية من جميع بيانات النظام (حالات، مستخدمين، تبرعات، سجلات) بصيغة JSON، أو تصدير بيانات المستخدمين بصيغة Excel.</p>
+              <p className="text-muted small mb-3">{isAr ? 'يمكنك أخذ نسخة احتياطية من جميع بيانات النظام (حالات، مستخدمين، تبرعات، سجلات) بصيغة JSON، أو تصدير بيانات المستخدمين بصيغة Excel.' : 'You can download a full backup of all system data in JSON format, or export user data as Excel.'}</p>
               <div className="d-flex flex-wrap gap-2">
                 <button className="btn btn-outline-primary d-flex align-items-center gap-2" onClick={() => {
                   const data = { cases: cases||[], users: users||[], donations: donations||[], activityLogs: activityLogs||[] };
@@ -2476,27 +2601,34 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
                   a.download = `Takaful_Backup_${new Date().toISOString().split('T')[0]}.json`;
                   a.click();
                   URL.revokeObjectURL(url);
-                  showToast('success', 'نجاح', 'تم تجهيز النسخة الاحتياطية بنجاح');
+                  showToast('success', isAr ? 'نجاح' : 'Success', isAr ? 'تم تجهيز النسخة الاحتياطية بنجاح' : 'Full backup generated successfully');
                 }}>
-                  <i className="bi bi-database-down"></i> أخذ نسخة احتياطية كاملة (JSON)
+                  <i className="bi bi-database-down"></i> {isAr ? 'أخذ نسخة احتياطية كاملة (JSON)' : 'Full System Backup (JSON)'}
                 </button>
                 <button className="btn btn-outline-success d-flex align-items-center gap-2" onClick={() => {
-                  if(!users || !users.length) { showToast('error', 'تنبيه', 'لا توجد بيانات مستخدمين للتصدير'); return; }
-                  const ws_data = users.map(u => ({
+                  if(!users || !users.length) { showToast('error', isAr ? 'تنبيه' : 'Notice', isAr ? 'لا توجد بيانات مستخدمين للتصدير' : 'No user data to export'); return; }
+                  const ws_data = users.map(u => isAr ? ({
                     'رقم المستخدم': u.uid || u.id || '',
                     'الاسم': u.name || '—',
                     'البريد الإلكتروني': u.email || '—',
                     'رقم الهاتف': u.phone || '—',
                     'الدور': u.role === 'admin' ? 'مدير' : u.role === 'volunteer' ? 'متطوع' : u.role === 'donor' ? 'متبرع' : 'مستفيد',
                     'تاريخ التسجيل': u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString('ar-SA') : '—'
+                  }) : ({
+                    'User ID': u.uid || u.id || '',
+                    'Name': u.name || '—',
+                    'Email': u.email || '—',
+                    'Phone': u.phone || '—',
+                    'Role': u.role,
+                    'Created Date': u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString('en-US') : '—'
                   }));
                   const ws = XLSX.utils.json_to_sheet(ws_data);
                   const wb = XLSX.utils.book_new();
-                  XLSX.utils.book_append_sheet(wb, ws, "المستخدمين");
+                  XLSX.utils.book_append_sheet(wb, ws, isAr ? "المستخدمين" : "Users");
                   XLSX.writeFile(wb, `Users_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
-                  showToast('success', 'نجاح', 'تم تصدير تقرير المستخدمين بنجاح');
+                  showToast('success', isAr ? 'نجاح' : 'Success', isAr ? 'تم تصدير تقرير المستخدمين بنجاح' : 'Users report exported successfully');
                 }}>
-                  <i className="bi bi-file-earmark-person"></i> تصدير بيانات المستخدمين (Excel)
+                  <i className="bi bi-file-earmark-person"></i> {isAr ? 'تصدير بيانات المستخدمين (Excel)' : 'Export Users (Excel)'}
                 </button>
               </div>
             </div>
@@ -2505,7 +2637,7 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
 
         <div className="col-12 text-end">
           <button className="btn btn-primary px-4 py-2" onClick={save} disabled={saving} style={{fontSize:'1rem', borderRadius:'50px', boxShadow:'0 4px 15px rgba(16,185,129,0.3)'}}>
-            {saving?<div className="spinner-border spinner-border-sm"></div>:<><i className="bi bi-check-lg me-2"></i>حفظ جميع إعدادات النظام</>}
+            {saving?<div className="spinner-border spinner-border-sm"></div>:<><i className="bi bi-check-lg me-2"></i>{isAr ? 'حفظ جميع إعدادات النظام' : 'Save All Settings'}</>}
           </button>
         </div>
       </div>
@@ -2516,7 +2648,7 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
 // ══════════════════════════════════════════
 // TRACKING VIEW (Live Volunteer GPS)
 // ══════════════════════════════════════════
-function TrackingView({users, cases}) {
+function TrackingView({users, cases, isAr}) {
   const mapRef = useRef(null);
   const leafletMap = useRef(null);
   const markersRef = useRef({});
@@ -2549,15 +2681,14 @@ function TrackingView({users, cases}) {
 
     locations.forEach(loc => {
       const { id, latitude, longitude, timestamp } = loc;
-      // Get volunteer details
       const user = users.find(u => u.uid === id || u.id === id);
-      const name = user ? user.name : 'متطوع غير معروف';
+      const name = user ? user.name : (isAr ? 'متطوع غير معروف' : 'Unknown Volunteer');
       
-      const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString('ar-SA') : 'غير معروف';
+      const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString(isAr?'ar-SA':'en-US') : (isAr ? 'غير معروف' : 'Unknown');
 
       if (markersRef.current[id]) {
         markersRef.current[id].setLatLng([latitude, longitude]);
-        markersRef.current[id].setPopupContent(`<b>${name}</b><br/>آخر تحديث: ${timeStr}`);
+        markersRef.current[id].setPopupContent(`<b>${name}</b><br/>${isAr?'آخر تحديث:':'Last update:'} ${timeStr}`);
       } else {
         const customIcon = L.divIcon({
           html: `<div style="font-size: 24px; color: var(--primary);"><i class="bi bi-car-front-fill"></i></div>`,
@@ -2566,24 +2697,23 @@ function TrackingView({users, cases}) {
           iconAnchor: [15, 30]
         });
         const marker = L.marker([latitude, longitude], {icon: customIcon}).addTo(map);
-        marker.bindPopup(`<b>${name}</b><br/>آخر تحديث: ${timeStr}`);
+        marker.bindPopup(`<b>${name}</b><br/>${isAr?'آخر تحديث:':'Last update:'} ${timeStr}`);
         markersRef.current[id] = marker;
       }
     });
 
-    // Optionally center map on first active volunteer
     if (locations.length > 0 && leafletMap.current.getZoom() === 12) {
        leafletMap.current.panTo([locations[0].latitude, locations[0].longitude]);
     }
 
-  }, [locations, users]);
+  }, [locations, users, isAr]);
 
   return (
     <div style={{display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)'}}>
       <div className="card h-100" style={{flex: 1, display: 'flex', flexDirection: 'column'}}>
         <div className="card-header d-flex justify-content-between align-items-center">
-          <div className="bold"><i className="bi bi-geo-alt-fill me-2 text-primary"></i>الخريطة المباشرة للمتطوعين النشطين</div>
-          <span className="badge bg-primary rounded-pill">{locations.length} متطوع ميداني</span>
+          <div className="bold"><i className="bi bi-geo-alt-fill me-2 text-primary"></i>{isAr ? 'الخريطة المباشرة للمتطوعين النشطين' : 'Live Active Volunteers Map'}</div>
+          <span className="badge bg-primary rounded-pill">{locations.length} {isAr ? 'متطوع ميداني' : 'field volunteers'}</span>
         </div>
         <div className="card-body p-0" style={{flex: 1, position: 'relative'}}>
           <div ref={mapRef} style={{width: '100%', height: '100%', minHeight: '400px', borderRadius: '0 0 var(--radius) var(--radius)'}}></div>
@@ -2591,8 +2721,8 @@ function TrackingView({users, cases}) {
             <div style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 1000}}>
               <div className="text-center" style={{background: 'var(--bg-glass)', padding: '20px', borderRadius: 'var(--radius)', backdropFilter: 'blur(10px)'}}>
                 <i className="bi bi-car-front" style={{fontSize: '3rem', color: 'var(--text-secondary)'}}></i>
-                <h4 className="mt-3">لا يوجد متطوعون نشطون حالياً</h4>
-                <p className="text-muted">تظهر مواقع المتطوعين هنا عند قبولهم لمهام ميدانية.</p>
+                <h4 className="mt-3">{isAr ? 'لا يوجد متطوعون نشطون حالياً' : 'No Active Volunteers Currently'}</h4>
+                <p className="text-muted">{isAr ? 'تظهر مواقع المتطوعين هنا عند قبولهم لمهام ميدانية.' : 'Volunteer locations will appear here during active field tasks.'}</p>
               </div>
             </div>
           )}

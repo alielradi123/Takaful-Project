@@ -2,9 +2,9 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="لوحة تحكم تكافل — بوابة المشرفين لإدارة الحالات الإنسانية والتبرعات">
-  <title>تكافل — بوابة المشرفين</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="Takaful Admin — Admin portal for managing humanitarian cases and donations">
+  <title>تكافل — بوابة المشرفين | Takaful Admin</title>
   <link rel="icon" type="image/webp" href="app-icon.webp">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
@@ -13,9 +13,15 @@
   <div class="login-page" style="min-height:100vh; background: var(--bg-dark);">
 
     <!-- Theme Toggle Button -->
-    <button id="theme-toggle" aria-label="تبديل الوضع" style="display:flex;align-items:center;padding:5px 6px;border-radius:50px;background:rgba(255,200,50,0.15);border:1px solid rgba(249,168,37,0.35);cursor:pointer;transition:all 0.35s ease;gap:2;min-width:70px;position:absolute;top:20px;left:20px;z-index:10;backdrop-filter:blur(10px)">
-      <span id="theme-icon-sun" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#F9A825;transition:all 0.35s ease;font-size:14px;box-shadow:0 2px 8px rgba(249,168,37,0.5)">☀️</span>
-      <span id="theme-icon-moon" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:transparent;transition:all 0.35s ease;font-size:14px;box-shadow:none">🌙</span>
+    <button id="theme-toggle" class="theme-toggle" aria-label="تبديل الوضع">
+      <span id="theme-icon-sun" class="theme-toggle-icon" aria-hidden="true"><i class="bi bi-sun-fill"></i></span>
+      <span id="theme-icon-moon" class="theme-toggle-icon moon" aria-hidden="true"><i class="bi bi-moon-stars-fill"></i></span>
+    </button>
+
+    <!-- Language Toggle Button -->
+    <button id="lang-toggle" class="language-toggle is-ar" aria-label="تبديل اللغة" onclick="toggleLang()">
+      <span id="lang-toggle-icon" class="language-toggle-icon flag-uk" aria-hidden="true">🇬🇧</span>
+      <span id="lang-toggle-label" class="language-toggle-label">EN</span>
     </button>
 
     <!-- Animated background circles -->
@@ -32,8 +38,8 @@
           <div class="login-logo-icon" style="background:#FFFFFF; padding:0; box-shadow:none; border:none;">
             <img src="app-icon.webp" alt="Takaful Logo" class="logo-image" style="filter: drop-shadow(0px 4px 12px rgba(232, 80, 10, 0.4));">
           </div>
-          <h1 style="font-size: 24px;">تـكـافـل</h1>
-          <p style="font-size: 13px;">نبض العطاء وإشراقة الأمل</p>
+          <h1 id="txt-appname" style="font-size: 24px;">تـكـافـل</h1>
+          <p id="txt-slogan" style="font-size: 13px;">نبض العطاء وإشراقة الأمل</p>
         </div>
 
         <!-- Error Message -->
@@ -46,14 +52,14 @@
         <form id="login-form" novalidate>
 
           <div class="form-group">
-            <label class="form-label" for="email-input">البريد الإلكتروني</label>
+            <label class="form-label" for="email-input" id="lbl-email">البريد الإلكتروني</label>
             <div class="input-group">
               <span class="input-icon"><i class="bi bi-envelope-fill"></i></span>
               <input
                 id="email-input"
                 type="email"
                 class="form-input"
-                placeholder="examble@takaful.org"
+                placeholder="example@takaful.org"
                 autocomplete="email"
                 required
               >
@@ -61,33 +67,31 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="password-input">كلمة المرور</label>
+            <label class="form-label" for="password-input" id="lbl-password">كلمة المرور</label>
             <div class="input-group">
-              <span class="input-icon" style="right: 14px;"><i class="bi bi-lock-fill"></i></span>
+              <span class="input-icon password-field-icon"><i class="bi bi-lock-fill"></i></span>
               <input
                 id="password-input"
                 type="password"
-                class="form-input"
+                class="form-input password-input"
                 placeholder="••••••••"
                 autocomplete="current-password"
-                style="padding-left: 40px;"
                 required
               >
-              <span class="password-toggle" onclick="togglePassword('password-input', this)" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); cursor: pointer; z-index: 10;"><i class="bi bi-eye"></i></span>
+              <span class="password-toggle" onclick="togglePassword('password-input', this)"><i class="bi bi-eye"></i></span>
             </div>
           </div>
           
           <div class="form-group" style="display:flex; justify-content:center; align-items:center; margin-top:-10px; margin-bottom:20px;">
             <div style="display:flex; align-items:center; gap:8px; background:rgba(232,80,10,0.08); border:1px solid rgba(232,80,10,0.2); padding:10px 16px; border-radius:12px; width:100%; justify-content:center; box-shadow:0 4px 12px rgba(232,80,10,0.05);">
               <i class="bi bi-shield-lock-fill" style="color:var(--primary); font-size:16px;"></i>
-              <span style="font-size:13px; font-weight:700; color:var(--text-primary);">دخول آمن — لوحة التحكم الإدارية</span>
+              <span id="txt-secure" style="font-size:13px; font-weight:700; color:var(--text-primary);">دخول آمن — لوحة التحكم الإدارية</span>
             </div>
           </div>
 
           <button type="submit" class="btn btn-primary" id="login-btn" style="border-radius:50px;">
             <span id="login-btn-text">تسجيل الدخول</span>
           </button>
-
 
         </form>
 
@@ -104,21 +108,123 @@
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
+  <script>
+    // ─── Language Strings ─────────────────────────────────────────────────────
+    window.LANG_STRINGS = window.LANG_STRINGS || {};
+    const LANG_STRINGS = {
+      ar: {
+        dir: 'rtl', lang: 'ar',
+        appname: 'تـكـافـل',
+        slogan: 'نبض العطاء وإشراقة الأمل',
+        email: 'البريد الإلكتروني',
+        password: 'كلمة المرور',
+        secure: 'دخول آمن — لوحة التحكم الإدارية',
+        loginBtn: 'تسجيل الدخول',
+        loading: 'جارٍ التحقق...',
+        welcome: 'مرحباً بك!',
+        redirecting: 'سيتم تحويلك للوحة التحكم...',
+        errFill: 'يرجى إدخال البريد الإلكتروني وكلمة المرور',
+        errCred: 'البريد الإلكتروني أو كلمة المرور غير صحيحة',
+        errNotFound: 'لا يوجد حساب بهذا البريد الإلكتروني',
+        errTooMany: 'تم تجاوز عدد المحاولات. حاول لاحقاً',
+        errNetwork: 'فشل الاتصال بالشبكة.',
+        errGeneric: 'حدث خطأ أثناء تسجيل الدخول',
+        errNotAdmin: 'هذا الحساب ليس لديه صلاحية دخول لوحة التحكم',
+        langBtn: 'EN'
+      },
+      en: {
+        dir: 'ltr', lang: 'en',
+        appname: 'Takaful',
+        slogan: 'The Pulse of Giving & Hope',
+        email: 'Email Address',
+        password: 'Password',
+        secure: 'Secure Login — Admin Dashboard',
+        loginBtn: 'Sign In',
+        loading: 'Verifying...',
+        welcome: 'Welcome!',
+        redirecting: 'Redirecting to dashboard...',
+        errFill: 'Please enter your email and password',
+        errCred: 'Incorrect email or password',
+        errNotFound: 'No account found with this email',
+        errTooMany: 'Too many attempts. Please try again later',
+        errNetwork: 'Network connection failed. If you are in Sudan, please enable VPN and try again.',
+        errGeneric: 'An error occurred during login',
+        errNotAdmin: 'This account does not have admin dashboard access',
+        langBtn: 'Ar'
+      }
+    };
+
+    let currentLang = localStorage.getItem('takaful-lang') || 'ar';
+
+    function applyLang(lang) {
+      const s = LANG_STRINGS[lang];
+      document.documentElement.setAttribute('lang', s.lang);
+      document.documentElement.setAttribute('dir', s.dir);
+      document.getElementById('txt-appname').textContent = s.appname;
+      document.getElementById('txt-slogan').textContent = s.slogan;
+      document.getElementById('lbl-email').textContent = s.email;
+      document.getElementById('lbl-password').textContent = s.password;
+      document.getElementById('txt-secure').textContent = s.secure;
+      document.getElementById('login-btn-text').textContent = s.loginBtn;
+      document.getElementById('lang-toggle-label').textContent = s.langBtn;
+      const langToggle = document.getElementById('lang-toggle');
+      const langToggleIcon = document.getElementById('lang-toggle-icon');
+      langToggle.setAttribute('aria-label', lang === 'ar' ? 'التبديل إلى الإنجليزية' : 'Switch to Arabic');
+      langToggleIcon.classList.toggle('flag-uk', lang === 'ar');
+      langToggleIcon.classList.toggle('flag-sudan', lang === 'en');
+      langToggle.classList.toggle('is-ar', lang === 'ar');
+      langToggle.classList.toggle('is-en', lang === 'en');
+      langToggleIcon.textContent = lang === 'ar' ? '🇬🇧' : '🇸🇩';
+      langToggle.classList.remove('is-changing');
+      void langToggle.offsetWidth;
+      langToggle.classList.add('is-changing');
+
+      // ── Fix input icons position for LTR/RTL ──
+      const inputIcon = document.querySelector('.input-icon');
+      if (inputIcon) {
+        inputIcon.style.right = lang === 'ar' ? '14px' : 'auto';
+        inputIcon.style.left  = lang === 'ar' ? 'auto' : '14px';
+      }
+      const formInput = document.querySelector('.input-group .form-input');
+      if (formInput) {
+        formInput.style.paddingRight = lang === 'ar' ? '44px' : '16px';
+        formInput.style.paddingLeft  = lang === 'ar' ? '16px' : '44px';
+      }
+
+      // ── Fix password toggle icon position ──
+      const pwdToggle = document.querySelector('.password-toggle');
+      if (pwdToggle) {
+        pwdToggle.style.left  = lang === 'ar' ? '14px' : 'auto';
+        pwdToggle.style.right = lang === 'ar' ? 'auto' : '14px';
+      }
+      const pwdInput = document.getElementById('password-input');
+      if (pwdInput) {
+        pwdInput.style.paddingLeft  = lang === 'ar' ? '40px' : '16px';
+        pwdInput.style.paddingRight = lang === 'ar' ? '16px' : '40px';
+      }
+
+      // ── Expose to window for module script ──
+      window.LANG_STRINGS = LANG_STRINGS;
+    }
+
+    function toggleLang() {
+      currentLang = (currentLang === 'ar') ? 'en' : 'ar';
+      localStorage.setItem('takaful-lang', currentLang);
+      applyLang(currentLang);
+    }
+
+    // Apply on load
+    applyLang(currentLang);
+  </script>
+
   <script type="module">
     // ── Day/Night: Auto + Manual (both) ──
-
     (function () {
       const hour = new Date().getHours();
-      // 06:00 - 18:00 => light, otherwise dark
       const autoIsDay = hour >= 6 && hour < 18;
-
-      // Manual preference: 'light' | 'dark' | 'auto'
       const saved = localStorage.getItem('takaful-theme-mode');
       const mode = saved || 'auto';
-
       const isDay = (mode === 'auto') ? autoIsDay : (mode === 'light');
-
-      // style.css uses :root[data-bs-theme]
       document.documentElement.setAttribute('data-bs-theme', isDay ? 'light' : 'dark');
     })();
 
@@ -129,17 +235,16 @@
 
     function updateThemeIcon() {
       const isLight = document.documentElement.getAttribute('data-bs-theme') === 'light';
-      
       themeToggleBtn.style.background = isLight ? 'rgba(255,200,50,0.15)' : 'rgba(30,30,60,0.9)';
       themeToggleBtn.style.borderColor = isLight ? 'rgba(249,168,37,0.35)' : 'rgba(100,100,255,0.2)';
-      
       themeIconSun.style.background = isLight ? '#F9A825' : 'transparent';
       themeIconSun.style.boxShadow = isLight ? '0 2px 8px rgba(249,168,37,0.5)' : 'none';
       themeIconSun.style.color = isLight ? '#fff' : 'rgba(255,200,50,0.4)';
-      
       themeIconMoon.style.background = isLight ? 'transparent' : 'rgba(99,102,241,0.8)';
       themeIconMoon.style.boxShadow = isLight ? 'none' : '0 2px 8px rgba(99,102,241,0.5)';
       themeIconMoon.style.color = isLight ? 'rgba(99,102,241,0.3)' : '#fff';
+      themeIconSun.classList.toggle('is-active', isLight);
+      themeIconMoon.classList.toggle('is-active', !isLight);
     }
     updateThemeIcon();
 
@@ -147,9 +252,14 @@
       const isLight = document.documentElement.getAttribute('data-bs-theme') === 'light';
       const newTheme = isLight ? 'dark' : 'light';
       document.documentElement.setAttribute('data-bs-theme', newTheme);
+      themeToggleBtn.classList.remove('is-changing');
+      void themeToggleBtn.offsetWidth;
+      themeToggleBtn.classList.add('is-changing');
       localStorage.setItem('takaful-theme-mode', newTheme);
       updateThemeIcon();
-    });    // ── Password Toggle ──
+    });
+
+    // ── Password Toggle ──
     window.togglePassword = function(inputId, iconSpan) {
       const input = document.getElementById(inputId);
       const icon = iconSpan.querySelector('i');
@@ -166,16 +276,20 @@
       }
     };
 
-
-import { loginWithEmail } from './auth.js';
+    import { loginWithEmail } from './auth.js';
     import { showToast } from './utils.js';
     import { auth } from './firebase-config.js';
     import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js';
 
+    const STRINGS = window.LANG_STRINGS || {};
+    function t(key) {
+      const lang = localStorage.getItem('takaful-lang') || 'ar';
+      return (STRINGS[lang] || STRINGS['ar'])[key] || key;
+    }
+
     // If already logged in, redirect
     onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Verify supervisor role before redirect
         try {
           const { checkAdminRole } = await import('./auth.js');
           const isSup = await checkAdminRole(user.uid);
@@ -190,13 +304,8 @@ import { loginWithEmail } from './auth.js';
     const errorBox = document.getElementById('error-box');
     const errorText = document.getElementById('error-text');
 
-    function showError(msg) {
-      errorText.textContent = msg;
-      errorBox.classList.remove('hidden');
-    }
-    function hideError() {
-      errorBox.classList.add('hidden');
-    }
+    function showError(msg) { errorText.textContent = msg; errorBox.classList.remove('hidden'); }
+    function hideError() { errorBox.classList.add('hidden'); }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -205,45 +314,41 @@ import { loginWithEmail } from './auth.js';
       const email = document.getElementById('email-input').value.trim();
       const password = document.getElementById('password-input').value;
 
-      if (!email || !password) {
-        showError('يرجى إدخال البريد الإلكتروني وكلمة المرور');
-        return;
-      }
+      if (!email || !password) { showError(t('errFill')); return; }
 
-      // Loading state
       btn.classList.add('loading');
       btn.disabled = true;
-      btnText.textContent = 'جارٍ التحقق...';
+      btnText.textContent = t('loading');
 
       try {
         await loginWithEmail(email, password);
-        showToast('success', 'مرحباً بك!', 'سيتم تحويلك للوحة التحكم...');
+        showToast('success', t('welcome'), t('redirecting'));
         setTimeout(() => { window.location.href = 'dashboard.html'; }, 800);
       } catch (err) {
-        let msg = 'حدث خطأ أثناء تسجيل الدخول';
+        let msg = t('errGeneric');
         if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
-          msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+          msg = t('errCred');
         } else if (err.code === 'auth/user-not-found') {
-          msg = 'لا يوجد حساب بهذا البريد الإلكتروني';
+          msg = t('errNotFound');
         } else if (err.code === 'auth/too-many-requests') {
-          msg = 'تم تجاوز عدد المحاولات. حاول لاحقاً';
+          msg = t('errTooMany');
         } else if (err.code === 'auth/network-request-failed' || (err.message && err.message.includes('network-request-failed'))) {
-          msg = 'فشل الاتصال بالشبكة. إذا كنت في السودان، يرجى تشغيل VPN وإعادة المحاولة.';
+          msg = t('errNetwork');
+        } else if (err.code === 'auth/not-admin') {
+          msg = t('errNotAdmin');
         } else if (err.message) {
           msg = err.message;
         }
         showError(msg);
         btn.classList.remove('loading');
         btn.disabled = false;
-        btnText.textContent = 'تسجيل الدخول';
+        btnText.textContent = t('loginBtn');
       }
     });
 
-    // Enter key support
     document.getElementById('password-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') form.dispatchEvent(new Event('submit'));
     });
-
 
   </script>
 </body>

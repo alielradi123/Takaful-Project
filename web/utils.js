@@ -10,6 +10,10 @@ export function formatCurrency(amount) {
   return `${formatNumber(amount)} ر.ي`;
 }
 
+export function isArabic() {
+  return (localStorage.getItem('takaful-lang') || 'ar') === 'ar';
+}
+
 // ── Format Dates ──
 export function formatDate(timestamp) {
   if (!timestamp) return '—';
@@ -21,8 +25,9 @@ export function formatDate(timestamp) {
   } else {
     date = new Date(timestamp);
   }
-  return new Intl.DateTimeFormat('ar-SA', {
-    year: 'numeric', month: 'long', day: 'numeric'
+  const locale = isArabic() ? 'ar-SA' : 'en-US';
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric', month: 'short', day: 'numeric'
   }).format(date);
 }
 
@@ -36,7 +41,8 @@ export function formatDateTime(timestamp) {
   } else {
     date = new Date(timestamp);
   }
-  return new Intl.DateTimeFormat('ar-SA', {
+  const locale = isArabic() ? 'ar-SA' : 'en-US';
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit'
   }).format(date);
@@ -55,25 +61,27 @@ export function timeAgo(timestamp) {
   const hr = Math.floor(min / 60);
   const day = Math.floor(hr / 24);
 
-  if (sec < 60) return 'الآن';
-  if (min < 60) return `منذ ${min} دقيقة`;
-  if (hr < 24) return `منذ ${hr} ساعة`;
-  if (day < 7) return `منذ ${day} يوم`;
+  const ar = isArabic();
+  if (sec < 60) return ar ? 'الآن' : 'Just now';
+  if (min < 60) return ar ? `منذ ${min} دقيقة` : `${min}m ago`;
+  if (hr < 24) return ar ? `منذ ${hr} ساعة` : `${hr}h ago`;
+  if (day < 7) return ar ? `منذ ${day} يوم` : `${day}d ago`;
   return formatDate(timestamp);
 }
 
 // ── Status Labels ──
 export function getStatusLabel(status) {
+  const ar = isArabic();
   const map = {
-    pending: 'معلق',
-    approved: 'موافق عليه',
-    rejected: 'مرفوض',
-    completed: 'مكتمل',
-    active: 'نشط',
-    suspended: 'موقوف',
-    'قيد الجمع': 'قيد الجمع',
-    'تم التوزيع': 'تم التوزيع',
-    'تم الاستلام': 'تم الاستلام',
+    pending: ar ? 'معلق' : 'Pending',
+    approved: ar ? 'معتمد' : 'Approved',
+    rejected: ar ? 'مرفوض' : 'Rejected',
+    completed: ar ? 'مكتمل' : 'Completed',
+    active: ar ? 'نشط' : 'Active',
+    suspended: ar ? 'موقوف' : 'Suspended',
+    'قيد الجمع': ar ? 'قيد الجمع' : 'Collecting',
+    'تم التوزيع': ar ? 'تم التوزيع' : 'Distributed',
+    'تم الاستلام': ar ? 'تم الاستلام' : 'Received',
   };
   return map[status] || status;
 }
@@ -94,14 +102,15 @@ export function getStatusBadgeClass(status) {
 }
 
 export function getRoleLabel(role) {
+  const ar = isArabic();
   const map = {
-    member: 'عضو',
-    employee: 'موظف',
-    admin: 'مدير',
-    donor: 'متبرع',
-    beneficiary: 'مستفيد',
-    volunteer: 'متطوع',
-    supervisor: 'مشرف',
+    member: ar ? 'عضو' : 'Member',
+    employee: ar ? 'موظف' : 'Employee',
+    admin: ar ? 'مدير' : 'Admin',
+    donor: ar ? 'متبرع' : 'Donor',
+    beneficiary: ar ? 'مستفيد' : 'Beneficiary',
+    volunteer: ar ? 'متطوع' : 'Volunteer',
+    supervisor: ar ? 'مشرف' : 'Supervisor',
   };
   return map[role] || role;
 }

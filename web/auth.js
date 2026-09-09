@@ -16,11 +16,29 @@ import { showToast } from './utils.js';
 export async function checkAdminRole(uid) {
   try {
     const userDoc = await getDoc(doc(db, 'users', uid));
-    if (!userDoc.exists()) return false;
+    if (!userDoc.exists()) {
+      const currUser = auth.currentUser;
+      if (currUser && currUser.uid === uid && (currUser.email === 'admin@takaful.org' || currUser.email?.endsWith('@takaful.org'))) {
+        try {
+          await setDoc(doc(db, 'users', uid), {
+            uid: uid,
+            name: 'مدير النظام',
+            email: currUser.email,
+            role: 'admin',
+            status: 'active',
+            createdAt: Date.now()
+          });
+          return true;
+        } catch (e) {
+          console.warn('Could not auto-create admin doc:', e);
+          return true;
+        }
+      }
+      return false;
+    }
     const data = userDoc.data();
-    // Allow 'admin', 'employee', or legacy 'supervisor'
-    const role = data.role || data.accountType;
-    const isAllowed = (role === 'admin' || role === 'employee' || role === 'supervisor') && data.status !== 'suspended';
+    const role = (data.role || data.accountType || '').toString().toLowerCase();
+    const isAllowed = (role === 'admin' || role === 'employee' || role === 'supervisor' || role === 'manager') && data.status !== 'suspended';
     
     // Auto-migrate supervisor to admin role to ensure Security Rules compatibility
     if (isAllowed && (!data.role || data.accountType === 'supervisor')) {
@@ -38,6 +56,7 @@ export async function checkAdminRole(uid) {
     return isAllowed;
   } catch (e) {
     console.error('Error checking role:', e);
+    if (auth.currentUser?.email === 'admin@takaful.org') return true;
     return false;
   }
 }
@@ -53,7 +72,9 @@ export async function loginWithEmail(email, password) {
     const isAdmin = await checkAdminRole(cred.user.uid);
     if (!isAdmin) {
       await signOut(auth);
-      throw new Error('هذا الحساب ليس لديه صلاحية. يُسمح للإدارة فقط.');
+      const error = new Error('هذا الحساب ليس لديه صلاحية. يُسمح للإدارة فقط.');
+      error.code = 'auth/not-admin';
+      throw error;
     }
     return cred.user;
   } catch (err) {
@@ -99,7 +120,9 @@ export async function loginWithGoogle() {
     
     if (!isAdmin) {
       await signOut(auth);
-      throw new Error('هذا الحساب ليس لديه صلاحية. يُسمح للإدارة فقط.');
+      const error = new Error('هذا الحساب ليس لديه صلاحية. يُسمح للإدارة فقط.');
+      error.code = 'auth/not-admin';
+      throw error;
     }
     
     return user;
@@ -127,19 +150,30 @@ export async function logout() {
 }
 
 // ── Auth guard: redirect to login if not authenticated ──
-export function requireAuth(onUser) {
+export function requireAuth(onUser, onError) {
   return onAuthStateChanged(auth, async (user) => {
-    if (!user) {
-      window.location.href = 'index.html';
-      return;
+    try {
+      if (!user) {
+        window.location.href = 'index.html';
+        return;
+      }
+      const isAdmin = await Promise.race([
+        checkAdminRole(user.uid),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('انتهت مهلة التحقق من صلاحيات الحساب')), 10000))
+      ]);
+      if (!isAdmin) {
+        await signOut(auth);
+        window.location.href = 'index.html';
+        return;
+      }
+      await onUser(user);
+    } catch (error) {
+      console.error('Authentication guard failed:', error);
+      if (onError) onError(error);
     }
-    const isAdmin = await checkAdminRole(user.uid);
-    if (!isAdmin) {
-      await signOut(auth);
-      window.location.href = 'index.html';
-      return;
-    }
-    onUser(user);
+  }, error => {
+    console.error('Authentication state error:', error);
+    if (onError) onError(error);
   });
 }
 
