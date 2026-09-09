@@ -811,10 +811,25 @@ html[dir="ltr"] .password-toggle{right:14px;left:auto}
   .auth-page>#theme-toggle{left:12px!important}
   .auth-page>#lang-toggle{left:92px!important}
   .main-content,html[dir="ltr"] .main-content{width:100%;max-width:100%;min-width:0;margin:0!important}
-  .topbar{height:auto;min-height:var(--topbar-h);padding:10px 12px;flex-wrap:wrap;gap:8px}
-  .topbar > div:first-child{flex:1 1 100%;min-width:0}
+  .topbar{
+    height:var(--topbar-h);
+    min-height:var(--topbar-h);
+    padding:10px 12px;
+    display:grid;
+    grid-template-columns:40px minmax(0,1fr);
+    grid-template-areas:"menu heading";
+    align-items:center;
+    gap:10px;
+    position:sticky;
+  }
+  .mobile-menu-toggle{grid-area:menu}
+  .topbar-heading{grid-area:heading;min-width:0;padding-inline-end:220px;text-align:right}
   .topbar-title{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .topbar-actions{flex:1 1 100%;justify-content:flex-start;flex-wrap:wrap;gap:6px;min-width:0}
+  .topbar-actions{position:absolute;top:10px;left:12px;width:auto;justify-content:flex-start;flex-wrap:nowrap;gap:6px;min-width:0}
+  .notification-control > button{width:42px;height:40px;padding:0!important;justify-content:center;gap:0}
+  .notification-control > button span:not([style*="min-width"]){display:none}
+  html[dir="ltr"] .topbar-actions{left:auto;right:12px}
+  html[dir="ltr"] .topbar-heading{padding-inline-end:220px;text-align:left}
   .notification-control{position:static!important}
   .notification-menu{position:fixed!important;top:112px!important;right:12px!important;left:12px!important;width:auto!important;max-width:none;max-height:min(65vh,380px);}
   .topbar-time{display:none}

@@ -374,7 +374,7 @@ function App() {
       <div className="main-content">
         <header className="topbar">
           <button className="mobile-menu-toggle" type="button" aria-label="Open menu" onClick={()=>setSidebarOpen(true)}><i className="bi bi-list"></i></button>
-          <div style={{flex:1}}>
+          <div className="topbar-heading" style={{flex:1}}>
             <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || (isAr ? 'تكافل' : 'Takaful')}</div>
           </div>
           <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
