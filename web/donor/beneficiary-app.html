@@ -39,7 +39,7 @@ import { auth, db } from 'firebase-config';
 import { uploadMultipleToSupabase } from '../supabase-config.js';
 import {
   collection, query, where, orderBy, onSnapshot,
-  doc, addDoc, updateDoc, serverTimestamp
+  doc, setDoc, updateDoc, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
 
@@ -430,10 +430,8 @@ function SubmitCasePage({user, onSuccess, isAr}) {
         createdAt: serverTimestamp()
       };
       
-      const docRef = await addDoc(collection(db,'cases'), caseData);
-      // Update with its own ID for compatibility
-      // We don't strictly need this, but the Android app does it.
-      await updateDoc(docRef, { id: docRef.id });
+      const docRef = doc(collection(db,'cases'));
+      await setDoc(docRef, { ...caseData, id: docRef.id, caseId: docRef.id });
       
       showToast('success', isAr?'تم رفع طلبك بنجاح، وهو قيد المراجعة الآن.':'Request submitted! It is now under review.');
       onSuccess();
