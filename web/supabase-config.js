@@ -19,24 +19,45 @@ export const STORAGE_BUCKET = 'takaful-media';
  * @returns {Promise<string>} - الرابط العام للصورة
  */
 export async function uploadToSupabase(file, path) {
-  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`;
+  const safePath = path.split('/').map(encodeURIComponent).join('/');
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${safePath}`;
+  const controller = new AbortController();
+  const uploadTimeoutMs = Math.min(
+    5 * 60 * 1000,
+    Math.max(2 * 60 * 1000, 30 * 1000 + Math.ceil(file.size / (256 * 1024)) * 1000)
+  );
+  const timeoutId = setTimeout(() => controller.abort(), uploadTimeoutMs);
+  let response;
 
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': file.type || 'image/jpeg',
-      'x-upsert': 'true',
-    },
-    body: file,
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`Supabase upload failed: ${err.message || response.statusText}`);
+  try {
+    response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': file.type || 'application/octet-stream',
+        'x-upsert': 'true',
+      },
+      body: file,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('انتهت مهلة رفع الملف إلى التخزين. جرّب ملفاً أصغر أو تحقق من الاتصال ثم أعد المحاولة.');
+    }
+    throw new Error(`تعذر الاتصال بتخزين Supabase: ${error.message}`);
+  } finally {
+    clearTimeout(timeoutId);
   }
 
-  return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`;
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => '');
+    let message = responseText || response.statusText;
+    try { message = JSON.parse(responseText).message || message; } catch (error) {}
+    throw new Error(`Supabase upload failed (${response.status}): ${message}`);
+  }
+
+  return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${safePath}`;
 }
 
 /**
@@ -49,7 +70,7 @@ export async function uploadMultipleToSupabase(files, folder) {
   return Promise.all(
     Array.from(files).map((file, index) => {
       // Sanitize file name to avoid upload errors with Arabic or special characters
-      const ext = file.name.split('.').pop();
+      const ext = file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1] || file.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'bin';
       const safeName = `file_${Math.random().toString(36).substring(2, 8)}.${ext}`;
       return uploadToSupabase(file, `${folder}/${Date.now()}_${index}_${safeName}`);
     })

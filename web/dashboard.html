@@ -45,7 +45,7 @@ import { auth, db } from './firebase-config.js';
 import {
   collection, query, orderBy, onSnapshot,
   doc, updateDoc, deleteDoc, addDoc, setDoc, serverTimestamp, Timestamp,
-  writeBatch, increment, getDocs
+  writeBatch, increment, getDocs, runTransaction
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { requireAuth, getCurrentUserInfo, logout } from './auth.js';
 import { showToast, showConfirm, formatDate, timeAgo } from './utils.js';
@@ -133,6 +133,7 @@ function App() {
   const [activityLogs,setActivityLogs] = useState([]);
   const [sysSettings,setSysSettings] = useState(null);
   const [sidebarOpen,setSidebarOpen] = useState(false);
+  const [reviewDonation,setReviewDonation] = useState(null);
 
   const logActivity = async (action, details) => {
     try {
@@ -143,7 +144,10 @@ function App() {
         adminUid: auth.currentUser?.uid || 'مجهول',
         timestamp: serverTimestamp()
       });
-    } catch(err) { console.error('Failed to log activity:', err); }
+    } catch(err) {
+      console.error('Failed to log activity:', err);
+      showToast('error', isAr ? 'تعذر تسجيل العملية' : 'Could not record activity', err.message);
+    }
   };
 
   useEffect(()=>{
@@ -189,12 +193,21 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
           }
         });
         setChats([...seen.values()]);
+      },err=>{
+        console.error('Chat list listener error:', err);
+        showToast('error', 'تعذر تحميل المحادثات', err.message);
       }),
       // shares listener
-      onSnapshot(query(collection(db,'shares'),orderBy('timestamp','desc')),s=>setShares(s.docs.map(d=>({id:d.id,...d.data()})))),
+      onSnapshot(query(collection(db,'shares'),orderBy('timestamp','desc')),s=>setShares(s.docs.map(d=>({id:d.id,...d.data()}))),err=>{
+        console.error('Shares listener error:', err);
+        showToast('error', isAr ? 'تعذر تحميل المشاركات' : 'Could not load shares', err.message);
+      }),
       // identity verifications listener
       onSnapshot(query(collection(db,'identity_verifications'),orderBy('submittedAt','desc')),s=>setVerifications(s.docs.map(d=>({id:d.id,...d.data()})))),
-      onSnapshot(query(collection(db,'activity_logs'),orderBy('timestamp','desc')),s=>setActivityLogs(s.docs.map(d=>({id:d.id,...d.data()})))),
+      onSnapshot(query(collection(db,'activity_logs'),orderBy('timestamp','desc')),s=>setActivityLogs(s.docs.map(d=>({id:d.id,...d.data()}))),err=>{
+        console.error('Activity log listener error:', err);
+        showToast('error', isAr ? 'تعذر تحميل سجل العمليات' : 'Could not load activity log', err.message);
+      }),
       onSnapshot(doc(db,'settings','general'),d=>setSysSettings(d.exists()?d.data():{}))
     ];
     return ()=>subs.forEach(u=>u());
@@ -202,7 +215,14 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
 
   useEffect(()=>{
     if(!activeChatId)return;
-    const u=onSnapshot(query(collection(db,'chats',activeChatId,'messages'),orderBy('createdAt','asc')),s=>setMsgs(s.docs.map(d=>({id:d.id,...d.data()}))));
+    const u=onSnapshot(
+      query(collection(db,'chats',activeChatId,'messages'),orderBy('createdAt','asc')),
+      s=>setMsgs(s.docs.map(d=>({id:d.id,...d.data()}))),
+      err=>{
+        console.error('Chat messages listener error:', err);
+        showToast('error', 'تعذر تحميل الرسائل', err.message);
+      }
+    );
     return ()=>u();
   },[activeChatId]);
 
@@ -278,8 +298,8 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
     if(!await showConfirm('حذف التبرع',`حذف تبرع "${donation.donorName||donation.caseTitle||'مجهول'}" نهائياً؟`,'🗑️'))return;
     try {
       await deleteDoc(doc(db,'donations',donation.id));
-      
-      if(donation.status === 'تم التوزيع' && donation.caseId) {
+
+      if((donation.caseAmountApplied || donation.status === 'تم التوزيع') && donation.caseId) {
         const amount = donation.amount || parseFloat((donation.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
         if(amount > 0) {
           try {
@@ -296,16 +316,84 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
       showToast('success','تم الحذف','تم حذف التبرع بنجاح');
     } catch(e) { showToast('error','خطأ',e.message); }
   };
-  const doDonStat = async(id,status)=>{try{await updateDoc(doc(db,'donations',id),{status,updatedAt:serverTimestamp()});logActivity('تحديث تبرع', `تم تحديث حالة تبرع إلى: ${status}`);showToast('success','تحديث','تم تحديث حالة التبرع')}catch(e){showToast('error','خطأ',e.message)}};
+  const doDonStat = async(id,status)=>{
+    try {
+      await runTransaction(db, async transaction => {
+        const donationRef = doc(db, 'donations', id);
+        const donationSnapshot = await transaction.get(donationRef);
+        if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
+        const donation = donationSnapshot.data();
+        const wasApplied = donation.caseAmountApplied === true || donation.status === 'تم التوزيع';
+        const shouldApply = status === 'تم الاستلام' || status === 'تم التوزيع';
+        const amount = Number(donation.amount) || parseFloat((donation.amountOrItem || '').replace(/[^0-9.]/g, '')) || 0;
+        const caseRef = donation.caseId && amount > 0 && wasApplied !== shouldApply
+          ? doc(db, 'cases', donation.caseId)
+          : null;
+        const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
+        const caseExists = Boolean(caseSnapshot?.exists());
+
+        transaction.update(donationRef, {
+          status,
+          caseAmountApplied: shouldApply && (wasApplied || caseExists),
+          updatedAt: serverTimestamp()
+        });
+        if (caseExists) {
+          transaction.update(caseRef, {
+            raisedAmount: increment(shouldApply ? amount : -amount),
+            amountRaised: increment(shouldApply ? amount : -amount),
+            updatedAt: serverTimestamp()
+          });
+        }
+      });
+      logActivity('تحديث تبرع', `تم تحديث حالة تبرع إلى: ${status}`);
+      showToast('success','تحديث','تم تحديث حالة التبرع ومبلغ الحالة');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
+  const doReviewDonation = async(donation, status) => {
+    const title = status === 'قيد الجمع' ? 'موافقة على التبرع' : 'رفض التبرع';
+    const message = status === 'قيد الجمع' ? 'سيتم اعتماد التبرع وإرساله لمرحلة الجمع.' : 'سيتم رفض التبرع وإشعار المتبرع.';
+    if(!await showConfirm(title, message, status === 'قيد الجمع' ? '✅' : '❌')) return;
+    try {
+      await updateDoc(doc(db,'donations',donation.id), {status, reviewedAt:serverTimestamp(), reviewedBy:auth.currentUser?.uid||'', updatedAt:serverTimestamp()});
+      if(donation.userId || donation.donorId) {
+        await addDoc(collection(db,'notifications'), {userId:donation.userId||donation.donorId, title:status === 'قيد الجمع' ? 'تم اعتماد التبرع' : 'تم رفض التبرع', message:`تم تحديث تبرعك لـ "${donation.caseTitle||'تبرع عام'}" إلى: ${status}`, type:'donation_update', isRead:false, timestamp:serverTimestamp()});
+      }
+      logActivity(status === 'قيد الجمع' ? 'اعتماد تبرع' : 'رفض تبرع', `تم تحديث تبرع ${donation.donorName||'مجهول'} إلى: ${status}`);
+      setReviewDonation(null);
+      showToast(status === 'قيد الجمع' ? 'success' : 'warning', status === 'قيد الجمع' ? 'تم اعتماد التبرع' : 'تم رفض التبرع', 'تم إشعار المتبرع');
+    } catch(e) { showToast('error','خطأ',e.message); }
+  };
 
   // تأكيد الاستلام — يكتب receivedAt حقيقي في Firebase
   const doConfirmReceived = async(id, donorName)=>{
     if(!await showConfirm('تأكيد الاستلام', `تأكيد استلام تبرع "${donorName||'مجهول'}"؟`, '💜'))return;
     try {
-      await updateDoc(doc(db,'donations',id),{
-        status: 'تم الاستلام',
-        receivedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+      await runTransaction(db, async transaction => {
+        const donationRef = doc(db, 'donations', id);
+        const donationSnapshot = await transaction.get(donationRef);
+        if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
+        const donation = donationSnapshot.data();
+        if (donation.status === 'تم الاستلام' || donation.status === 'تم التوزيع') return;
+        if (donation.status !== 'قيد الجمع') throw new Error('يجب اعتماد التبرع قبل تأكيد استلامه');
+
+        const amount = Number(donation.amount) || parseFloat((donation.amountOrItem || '').replace(/[^0-9.]/g, '')) || 0;
+        const caseRef = donation.caseId && amount > 0 ? doc(db, 'cases', donation.caseId) : null;
+        const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
+        const applyAmount = Boolean(caseSnapshot?.exists() && !donation.caseAmountApplied);
+
+        transaction.update(donationRef, {
+          status: 'تم الاستلام',
+          receivedAt: serverTimestamp(),
+          caseAmountApplied: donation.caseAmountApplied === true || applyAmount,
+          updatedAt: serverTimestamp()
+        });
+        if (applyAmount) {
+          transaction.update(caseRef, {
+            raisedAmount: increment(amount),
+            amountRaised: increment(amount),
+            updatedAt: serverTimestamp()
+          });
+        }
       });
       logActivity('تأكيد استلام', `تم تأكيد استلام تبرع من: ${donorName||'مجهول'}`);
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#42A5F5', '#66BB6A', '#F9A825'] });
@@ -317,21 +405,35 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
   const doConfirmDistributed = async(donation)=>{
     if(!await showConfirm('تأكيد التوزيع', `تأكيد توزيع تبرع "${donation.donorName||'مجهول'}" على المستفيد؟`, '✅'))return;
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db,'donations',donation.id),{
-        status: 'تم التوزيع',
-        distributedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-      const amount = donation.amount || parseFloat((donation.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
-      if(donation.caseId && amount > 0) {
-        batch.update(doc(db,'cases',donation.caseId),{
-          raisedAmount: increment(amount),
-          amountRaised: increment(amount),
+      await runTransaction(db, async transaction => {
+        const donationRef = doc(db, 'donations', donation.id);
+        const donationSnapshot = await transaction.get(donationRef);
+        if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
+        const currentDonation = donationSnapshot.data();
+        if (currentDonation.status === 'تم التوزيع') return;
+        if (currentDonation.status !== 'تم الاستلام') throw new Error('يجب تأكيد استلام التبرع قبل توزيعه');
+
+        const amount = Number(currentDonation.amount) || parseFloat((currentDonation.amountOrItem || '').replace(/[^0-9.]/g, '')) || 0;
+        const caseRef = currentDonation.caseId && amount > 0 && !currentDonation.caseAmountApplied
+          ? doc(db, 'cases', currentDonation.caseId)
+          : null;
+        const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
+        const applyAmount = Boolean(caseSnapshot?.exists());
+
+        transaction.update(donationRef, {
+          status: 'تم التوزيع',
+          distributedAt: serverTimestamp(),
+          caseAmountApplied: currentDonation.caseAmountApplied === true || applyAmount,
           updatedAt: serverTimestamp()
         });
-      }
-      await batch.commit();
+        if (applyAmount) {
+          transaction.update(caseRef, {
+            raisedAmount: increment(amount),
+            amountRaised: increment(amount),
+            updatedAt: serverTimestamp()
+          });
+        }
+      });
       logActivity('تأكيد توزيع', `تم توزيع تبرع من: ${donation.donorName||'مجهول'}`);
       confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: ['#66BB6A', '#FFF', '#2E7D32'] });
       showToast('success','تم التوزيع ✅', 'تم التوزيع وتحديث تقدم الحالة');
@@ -357,6 +459,57 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
       await batch.commit();
       showToast('success','تم المسح','تم مسح السجل بالكامل بنجاح');
     } catch(e) { showToast('error','خطأ',e.message); }
+  };
+
+  const doDelShare = async(share) => {
+    const title = share.caseTitle || share.caseId || (isAr ? 'مشاركة' : 'Share');
+    const confirmed = await showConfirm(
+      isAr ? 'حذف المشاركة' : 'Delete share',
+      isAr ? `هل تريد حذف مشاركة "${title}" نهائياً؟` : `Permanently delete the share for "${title}"?`,
+      '🗑️'
+    );
+    if(!confirmed) return;
+    try {
+      await deleteDoc(doc(db,'shares',share.id));
+      await logActivity('حذف مشاركة', `تم حذف مشاركة الحالة: ${title}`);
+      showToast('success', isAr ? 'تم الحذف' : 'Deleted', isAr ? 'تم حذف المشاركة بنجاح' : 'Share deleted successfully');
+    } catch(e) {
+      showToast('error', isAr ? 'تعذر حذف المشاركة' : 'Could not delete share', e.message);
+    }
+  };
+
+  const doClearShares = async() => {
+    if(shares.length === 0) return;
+    const confirmed = await showConfirm(
+      isAr ? 'حذف جميع المشاركات' : 'Delete all shares',
+      isAr
+        ? `سيتم حذف ${shares.length} مشاركة نهائياً. لا يمكن التراجع عن هذا الإجراء. هل تريد المتابعة؟`
+        : `${shares.length} shares will be permanently deleted. This cannot be undone. Continue?`,
+      '⚠️'
+    );
+    if(!confirmed) return;
+
+    let deletedCount = 0;
+    try {
+      const snapshot = await getDocs(collection(db,'shares'));
+      for(let start = 0; start < snapshot.docs.length; start += 500) {
+        const batch = writeBatch(db);
+        snapshot.docs.slice(start, start + 500).forEach(share => batch.delete(share.ref));
+        await batch.commit();
+        deletedCount += Math.min(500, snapshot.docs.length - start);
+      }
+      await logActivity('حذف جميع المشاركات', `تم حذف ${deletedCount} مشاركة`);
+      showToast(
+        'success',
+        isAr ? 'اكتمل الحذف' : 'Deletion complete',
+        isAr ? `تم حذف ${deletedCount} مشاركة` : `${deletedCount} shares deleted`
+      );
+    } catch(e) {
+      const progress = deletedCount > 0
+        ? (isAr ? ` تم حذف ${deletedCount} مشاركة قبل حدوث الخطأ.` : ` ${deletedCount} shares were deleted before the error.`)
+        : '';
+      showToast('error', isAr ? 'تعذر حذف جميع المشاركات' : 'Could not delete all shares', `${e.message}${progress}`);
+    }
   };
 
   const doToggle  = async(id,stat,name,role)=>{if(role==='admin'){showToast('error','غير مسموح','لا يمكن تعليق حساب مدير');return;}const ns=stat==='active'?'suspended':'active';if(!await showConfirm(ns==='suspended'?'تعليق':'تفعيل',`${ns==='suspended'?'تعليق':'تفعيل'} حساب "${name}"؟`,ns==='suspended'?'🔒':'🔓'))return;try{await updateDoc(doc(db,'users',id),{status:ns});logActivity('تحديث حالة مستخدم', `تم ${ns==='suspended'?'تعليق':'تفعيل'} حساب: ${name}`);showToast('success','تم',`${ns==='suspended'?'تم تعليق':'تم تفعيل'} "${name}"`)}catch(e){showToast('error','خطأ',e.message)}};
@@ -550,12 +703,12 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
           {page==='pending'   && <PendingView cases={pending} doApprove={doApprove} doReject={doReject} doDelCase={doDelCase} isAr={isAr} />}
           {page==='cases'     && <CasesView cases={cases} users={users} doApprove={doApprove} doReject={doReject} doComplete={doComplete} doDelCase={doDelCase} doUpdateRaisedAmount={doUpdateRaisedAmount} setAssignModal={setAssignModal} openNewCase={openNewCase} setOpenNewCase={setOpenNewCase} isAr={isAr} />}
           {page==='tracking'  && <TrackingView users={users} cases={cases} isAr={isAr} />}
-          {page==='donations' && <DonationsView donations={donations} cases={cases} users={users} doDonStat={doDonStat} doDelDon={doDelDon} doConfirmReceived={doConfirmReceived} doConfirmDistributed={doConfirmDistributed} isAr={isAr} />}
+          {page==='donations' && <DonationsView donations={donations} cases={cases} users={users} doDonStat={doDonStat} doReviewDonation={doReviewDonation} setReviewDonation={setReviewDonation} doDelDon={doDelDon} doConfirmReceived={doConfirmReceived} doConfirmDistributed={doConfirmDistributed} isAr={isAr} />}
           {page==='users'     && <UsersView users={users} doToggle={doToggle} doDelUser={doDelUser} doChangeRole={doChangeRole} isAr={isAr} />}
-          {page==='verifications' && <VerificationsView verifications={verifications} doDelVerification={doDelVerification} isAr={isAr} />}
+          {page==='verifications' && <VerificationsView verifications={verifications} users={users} doDelVerification={doDelVerification} doToggle={doToggle} doDelUser={doDelUser} doChangeRole={doChangeRole} isAr={isAr} />}
           {page==='chats'     && <ChatsView chats={chats} msgs={msgs} activeChatId={activeChatId} setChat={setChat} sendMsg={sendMsg} msgIn={msgIn} setMsgIn={setMsgIn} userInfo={userInfo} users={users} doDelMsg={doDelMsg} doEditMsg={doEditMsg} doDelChat={doDelChat} isAr={isAr} />}
           {page==='reports'   && <ReportsView donations={donations} cases={cases} users={users} isAr={isAr} />}
-          {page==='shares'    && <SharesView shares={shares} cases={cases} isAr={isAr} />}
+          {page==='shares'    && <SharesView shares={shares} cases={cases} isAr={isAr} doDelShare={doDelShare} doClearShares={doClearShares} />}
           {page==='activity'  && <ActivityView logs={activityLogs} doDelLog={doDelLog} doClearLogs={doClearLogs} isAr={isAr} />}
           {page==='settings'  && <SettingsView sysSettings={sysSettings} logActivity={logActivity} cases={cases} users={users} donations={donations} activityLogs={activityLogs} isAr={isAr} />}
         </main>
@@ -563,6 +716,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
 
       {/* VOLUNTEER ASSIGN MODAL */}
       {assignModal && <AssignVolunteerModal caseItem={assignModal} users={users} onClose={()=>setAssignModal(null)} isAr={isAr} />}
+      {reviewDonation && <DonationReviewModal donation={reviewDonation} isAr={isAr} onClose={()=>setReviewDonation(null)} onReview={doReviewDonation} />}
     </div>
   );
 }
@@ -678,7 +832,7 @@ function CaseModal({init, onClose, isAr}) {
   const [files,setFiles]=useState([]);
   const [previews,setPreviews]=useState([]);
   const up=k=>e=>setF(p=>({...p,[k]:e.target.value}));
-  
+
   const upFile=e=>{
     const newFiles=Array.from(e.target.files);
     setFiles(p=>[...p,...newFiles]);
@@ -688,31 +842,31 @@ function CaseModal({init, onClose, isAr}) {
       r.readAsDataURL(f);
     });
   };
-  
+
   const removeImage=(idx)=>{
     setF(p=>({...p,imageUrls:p.imageUrls.filter((_,i)=>i!==idx)}));
   };
-  
+
   const removePreview=(idx)=>{
     setFiles(p=>p.filter((_,i)=>i!==idx));
     setPreviews(p=>p.filter((_,i)=>i!==idx));
   };
-  
+
   const save=async()=>{
     if(!f.title.trim()||!f.applicantName.trim()){showToast('error',isAr?'بيانات ناقصة':'Missing Data',isAr?'عنوان الحالة واسم مقدم الطلب مطلوبان':'Case title and applicant name are required');return}
     setSaving(true);
     try{
       let urls=[...f.imageUrls];
-      
+
       // ─── رفع الصور الجديدة إلى Supabase Storage ───
       if (files.length > 0) {
         const tmpId = isEdit ? init.id : doc(collection(db,'cases')).id;
-        const uploadedUrls = await uploadMultipleToSupabase(files, 'case_documents', tmpId);
+        const uploadedUrls = await uploadMultipleToSupabase(files, 'case_documents');
         urls = [...urls, ...uploadedUrls];
       }
-      
+
       const amt = parseFloat(f.amountRequired)||0;
-      
+
       if(isEdit){
         const data={
           title:f.title, applicantName:f.applicantName,
@@ -776,14 +930,14 @@ function CaseModal({init, onClose, isAr}) {
         <div className="col-md-4"><Field label={isAr ? "درجة الإلحاح" : "Urgency Level"}><select className="form-input" value={f.urgencyLevel} onChange={up('urgencyLevel')}><option value="عادي">{isAr ? 'عادي' : 'Normal'}</option><option value="متوسط">{isAr ? 'متوسط' : 'Medium'}</option><option value="عاجل">{isAr ? 'عاجل' : 'Urgent'}</option></select></Field></div>
         <div className="col-md-4"><Field label={isAr ? "المبلغ المطلوب" : "Target Amount"}><input className="form-input" type="number" value={f.amountRequired} onChange={up('amountRequired')} placeholder="0" /></Field></div>
         {isEdit&&<div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option value="pending">{isAr ? 'معلق' : 'Pending'}</option><option value="approved">{isAr ? 'معتمد' : 'Approved'}</option><option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option><option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option></select></Field></div>}
-        
+
         <div className="col-12">
           <Field label={isAr ? "صور الحالة (يمكن اختيار عدة صور)" : "Case Images (Multiple files allowed)"}>
             <input className="form-input" type="file" accept="image/*" multiple onChange={upFile} />
             <small className="text-muted d-block mt-1">{isAr ? '💡 يمكنك تحميل عدة صور لتأكيد الحالة' : '💡 You can upload multiple images to support the case'}</small>
           </Field>
         </div>
-        
+
         {(f.imageUrls.length > 0 || previews.length > 0) && (
           <div className="col-12">
             <Field label={isAr ? `الصور المرفقة (${f.imageUrls.length + previews.length})` : `Attached Images (${f.imageUrls.length + previews.length})`}>
@@ -808,7 +962,7 @@ function CaseModal({init, onClose, isAr}) {
             </Field>
           </div>
         )}
-        
+
         <div className="col-12"><Field label={isAr ? "وصف الحالة" : "Case Description & Story"}><textarea className="form-input" rows={4} value={f.description} onChange={up('description')} placeholder={isAr ? "تفاصيل الحالة وقصة المستفيد..." : "Case details and beneficiary story..."} style={{resize:'vertical'}} /></Field></div>
       </div>
     </Modal>
@@ -1186,7 +1340,27 @@ function DonationModal({init, cases, onClose, isAr}) {
 // ══════════════════════════════════════════
 // DONATIONS VIEW
 // ══════════════════════════════════════════
-function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmReceived, doConfirmDistributed, isAr}) {
+function DonationReviewModal({donation, isAr, onClose, onReview}) {
+  const statusSteps = isAr ? ['قيد المراجعة','قيد الجمع','تم الاستلام','تم التوزيع','مرفوض'] : ['Under review','Collecting','Received','Distributed','Rejected'];
+  const statusIndex = donation.status === 'مرفوض' ? 4 : donation.status === 'تم التوزيع' ? 3 : donation.status === 'تم الاستلام' ? 2 : donation.status === 'قيد الجمع' ? 1 : 0;
+  const receiptIsImage = donation.receiptUrl && /\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i.test(donation.receiptUrl);
+  return <Modal title={isAr ? 'مراجعة التبرع' : 'Review Donation'} icon="bi-shield-check" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>{isAr ? 'إغلاق' : 'Close'}</button>{donation.status === 'قيد المراجعة' && <><button className="btn btn-reject" onClick={()=>onReview(donation,'مرفوض')}><i className="bi bi-x-circle"></i>{isAr ? 'رفض' : 'Reject'}</button><button className="btn btn-primary" onClick={()=>onReview(donation,'قيد الجمع')}><i className="bi bi-check-circle"></i>{isAr ? 'اعتماد التبرع' : 'Approve donation'}</button></>}</>}>
+    <div className="donation-review-grid">
+      <div className="donation-review-field"><small>{isAr ? 'المتبرع' : 'Donor'}</small><strong>{donation.donorName || (isAr ? 'مجهول' : 'Anonymous')}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'الحالة المستفيدة' : 'Beneficiary case'}</small><strong>{donation.caseTitle || (isAr ? 'تبرع عام' : 'General donation')}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'المبلغ / العطاء' : 'Amount / item'}</small><strong>{donation.amountOrItem || donation.amount || '—'}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'طريقة الدفع' : 'Payment method'}</small><strong>{donation.paymentMethod || '—'}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'رقم العملية' : 'Transaction ID'}</small><strong>{donation.transactionId || '—'}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'تحليل الإيصال' : 'Receipt analysis'}</small><strong style={{color:donation.aiSuspicionFlag?'var(--red-light)':'var(--primary-light)'}}>{donation.aiSuspicionFlag ? (isAr ? 'يحتاج مراجعة' : 'Needs review') : (isAr ? 'مطابق مبدئيًا' : 'Initially matched')}</strong></div>
+    </div>
+    <div className="donation-review-timeline">{statusSteps.map((label,index)=>{const rejected=donation.status==='مرفوض';const active=rejected?index===4:index<4&&index<=statusIndex;return <div key={label} className={`donation-review-step ${active?'active':''} ${index===statusIndex?'current':''}`}><span>{label}</span></div>;})}</div>
+    {donation.donorMessage && <div className="donation-review-field" style={{marginTop:14}}><small>{isAr ? 'رسالة المتبرع' : 'Donor message'}</small><strong>{donation.donorMessage}</strong></div>}
+    {donation.receiptUrl && <div style={{marginTop:14}}>{receiptIsImage ? <img className="donation-receipt-preview" src={donation.receiptUrl} alt={isAr ? 'إيصال التبرع' : 'Donation receipt'} onClick={()=>window.open(donation.receiptUrl,'_blank')} /> : <a className="btn btn-outline" href={donation.receiptUrl} target="_blank" rel="noreferrer"><i className="bi bi-receipt"></i>{isAr ? 'فتح الإيصال' : 'Open receipt'}</a>}</div>}
+    {donation.ocrText && <details style={{marginTop:14}}><summary className="text-muted">{isAr ? 'النص المستخرج من الإيصال' : 'OCR extracted text'}</summary><pre style={{whiteSpace:'pre-wrap',fontFamily:'inherit',fontSize:12,marginTop:8,padding:10,borderRadius:8,background:'var(--bg-input)'}}>{donation.ocrText}</pre></details>}
+  </Modal>;
+}
+
+function DonationsView({donations, cases, users, doDonStat, doReviewDonation, setReviewDonation, doDelDon, doConfirmReceived, doConfirmDistributed, isAr}) {
   const [q,setQ]=useState(''); const [st,setSt]=useState('all');
   const [modal,setModal]=useState(null);
 
@@ -1195,7 +1369,7 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
     return mq&&(st==='all'||d.status===st);
   });
 
-  const DON_STATUSES=['قيد الجمع','تم الاستلام','تم التوزيع','قيد المراجعة','مقبول (خصم تلقائي)','مرفوض'];
+  const DON_STATUSES=['قيد المراجعة','قيد الجمع','تم الاستلام','تم التوزيع','مرفوض'];
 
   // Summary stats
   const total    = donations.length;
@@ -1268,7 +1442,7 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
                           {(() => {
                             const dUser = users && users.find(u => (d.uid && u.uid === d.uid) || (d.donorId && u.uid === d.donorId) || (d.userId && u.uid === d.userId) || (d.email && u.email === d.email) || (d.donorName && u.name === d.donorName));
                             const pUrl = d.photoURL || d.donorPhotoURL || (dUser ? dUser.photoURL : null);
-                            return pUrl 
+                            return pUrl
                               ? <img src={pUrl} alt={d.donorName||'مجهول'} style={{width:30,height:30,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} />
                               : <Av name={d.donorName||'م'} size={30} />;
                           })()}
@@ -1319,6 +1493,9 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
                       </td>
                       <td data-label={isAr ? 'إجراءات' : 'Actions'}>
                         <div className="d-flex gap-1">
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setReviewDonation(d)} title={isAr ? "مراجعة التفاصيل" : "Review details"}>
+                            <i className="bi bi-eye"></i>
+                          </button>
                           {d.status === 'قيد الجمع' && (
                             <button className="btn btn-outline btn-icon btn-sm" style={{borderColor:'var(--primary-light)',color:'var(--primary-light)'}} onClick={()=>doConfirmReceived(d.id, d.donorName)} title={isAr ? "تأكيد الاستلام" : "Confirm Receipt"}>
                               <i className="bi bi-heart-fill"></i>
@@ -1331,8 +1508,8 @@ function DonationsView({donations, cases, users, doDonStat, doDelDon, doConfirmR
                           )}
                           {d.status === 'قيد المراجعة' && (
                             <>
-                              <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مقبول (خصم تلقائي)')} title={isAr ? "موافقة (خصم)" : "Approve (Deduct)"}><i className="bi bi-check-circle-fill"></i></button>
-                              <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doDonStat(d.id, 'مرفوض')} title={isAr ? "رفض الدفع" : "Reject Payment"}><i className="bi bi-x-circle-fill"></i></button>
+                              <button className="btn btn-approve btn-icon btn-sm" onClick={()=>doReviewDonation(d, 'قيد الجمع')} title={isAr ? "اعتماد التبرع" : "Approve donation"}><i className="bi bi-check-circle-fill"></i></button>
+                              <button className="btn btn-reject btn-icon btn-sm" onClick={()=>doReviewDonation(d, 'مرفوض')} title={isAr ? "رفض الدفع" : "Reject Payment"}><i className="bi bi-x-circle-fill"></i></button>
                             </>
                           )}
                           <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setModal(d)} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
@@ -1486,10 +1663,10 @@ function UsersView({users, doToggle, doDelUser, doChangeRole, isAr}) {
                         {userRole === 'admin' ? (
                           <span className={rc.c} style={{padding:'6px 12px',fontSize:'12px',fontWeight:'bold',display:'inline-block'}}>{rc.l}</span>
                         ) : (
-                          <select 
-                            className={rc.c} 
+                          <select
+                            className={rc.c}
                             style={{width:'auto',padding:'4px 20px 4px 10px',fontSize:'12px', border:'none', outline:'none', cursor:'pointer', fontWeight: 'bold'}}
-                            value={userRole} 
+                            value={userRole}
                             onChange={(e) => doChangeRole(u.id, u.name, e.target.value)}
                           >
                             <option value="donor" style={{color:'#000'}}>{isAr ? 'متبرع' : 'Donor'}</option>
@@ -1535,11 +1712,11 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
   const endRef=useRef(null);
   const [editingMsg, setEditingMsg] = useState(null);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'})},[msgs]);
-  
+
   // Find current chat name and user
   const currentChat = chats.find(c => c.id === activeChatId);
   const chatUser = currentChat ? users.find(u => u.uid === currentChat.userId) : null;
-  const ROLE_LABELS = isAr 
+  const ROLE_LABELS = isAr
     ? { beneficiary: 'مستفيد', volunteer: 'متطوع', donor: 'متبرع' }
     : { beneficiary: 'Beneficiary', volunteer: 'Volunteer', donor: 'Donor' };
   const roleLabel = chatUser ? (ROLE_LABELS[chatUser.role||chatUser.accountType] || (isAr ? 'مستخدم' : 'User')) : (isAr ? 'مستخدم' : 'User');
@@ -1587,7 +1764,7 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
              );
            })}
         </div>
-        
+
         {/* Messaging window */}
         <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
           {!activeChatId
@@ -1608,11 +1785,11 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
                   return (
                     <div key={m.id} className={`d-flex gap-2 mb-2 align-items-end ${isAdmin?'justify-content-start':'justify-content-end'}`} style={{flexDirection: isAdmin?'row':'row-reverse'}}>
                       {/* Avatar */}
-                      {m.senderPhotoUrl 
-                        ? <img src={m.senderPhotoUrl} alt="صورة" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} /> 
+                      {m.senderPhotoUrl
+                        ? <img src={m.senderPhotoUrl} alt="صورة" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}} />
                         : <Av name={isAdmin?userInfo.fullName:(m.senderName||currentChat?.userName||'م')} size={28} />
                       }
-                      
+
                       <div className="p-3" style={{
                         maxWidth:'70%',
                         background: isAdmin?'var(--primary-glow)':'var(--bg-glass)',
@@ -1622,7 +1799,7 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
                         position:'relative'
                       }}>
                         <div style={{fontSize:'.62rem',fontWeight:700,color:'var(--text-muted)',marginBottom:3}}>{isAdmin?userInfo.fullName:(m.senderName||currentChat?.userName||(isAr ? 'المستخدم' : 'User'))}</div>
-                        
+
                         {editingMsg?.id === m.id ? (
                           <div className="d-flex flex-column gap-2 mt-2">
                             <input className="form-input" style={{fontSize:'.85rem', padding:'4px 8px'}} autoFocus value={editingMsg.text} onChange={e=>setEditingMsg({...editingMsg, text:e.target.value})} onKeyDown={e=>{if(e.key==='Enter') { doEditMsg(activeChatId, m.id, editingMsg.text); setEditingMsg(null); }}} />
@@ -1634,7 +1811,7 @@ function ChatsView({chats,msgs,activeChatId,setChat,sendMsg,msgIn,setMsgIn,userI
                         ) : (
                           <div style={{fontSize:'.85rem',lineHeight:1.5}}>{m.text} {m.updatedAt && <span style={{fontSize:'10px',opacity:0.6}}>{isAr ? '(معدل)' : '(edited)'}</span>}</div>
                         )}
-                        
+
                         {isAdmin && !editingMsg && (
                           <div style={{position:'absolute', top:5, left: isAdmin?5:'auto', right: !isAdmin?5:'auto', display:'flex', gap:6, opacity:0.6}}>
                             <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'var(--text-muted)',padding:0,cursor:'pointer',fontSize:'11px'}} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
@@ -1678,7 +1855,7 @@ function ReportsView({donations, cases, users, isAr}) {
       if (!ts) return false;
       const dDate = ts.toDate ? ts.toDate() : new Date(ts);
       const diffTime = Math.abs(now - dDate);
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       if (dateRange === 'week') return diffDays <= 7;
       if (dateRange === 'month') return diffDays <= 30;
       if (dateRange === 'year') return diffDays <= 365;
@@ -1769,12 +1946,12 @@ function ReportsView({donations, cases, users, isAr}) {
     return acc;
   },{});
   const topDonorsList = Object.entries(topDonors).sort(([,a],[,b])=>b.amt-a.amt).slice(0,5);
-  
+
   // Smart Analysis
   const highestMonth = monthlyData.data.length ? monthlyData.labels[monthlyData.data.indexOf(Math.max(...monthlyData.data))] : '—';
   const highestCat = catData.data.length ? catData.labels[catData.data.indexOf(Math.max(...catData.data))] : '—';
   const avgDonation = filteredDonations.length ? (totalAmt / filteredDonations.length) : 0;
-  
+
   const targetTotal = cases.reduce((s,c)=>s+(parseFloat(String(c.targetAmount||c.amountRequired||'0').replace(/[^0-9.]/g,''))||0),0);
   const raisedTotal = cases.reduce((s,c)=>s+(parseFloat(String(c.raisedAmount||c.amountRaised||'0').replace(/[^0-9.]/g,''))||0),0);
   const globalProgress = targetTotal > 0 ? (raisedTotal / targetTotal) * 100 : 0;
@@ -1887,7 +2064,7 @@ function ReportsView({donations, cases, users, isAr}) {
       <div className="mb-4 p-4 rounded-4 position-relative overflow-hidden" style={{background:'linear-gradient(135deg, rgba(16,185,129,0.03), rgba(59,130,246,0.03))', border:'1px solid rgba(16,185,129,0.15)', boxShadow:'0 10px 30px rgba(0,0,0,0.02)'}}>
         <div style={{position:'absolute', top:'-50%', right:'-10%', width:'300px', height:'300px', background:'radial-gradient(circle, rgba(16,185,129,0.08) 0%, transparent 70%)', borderRadius:'50%', zIndex:0}}></div>
         <div style={{position:'absolute', bottom:'-50%', left:'-10%', width:'300px', height:'300px', background:'radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)', borderRadius:'50%', zIndex:0}}></div>
-        
+
         <div style={{position:'relative', zIndex:1}}>
           <div className="d-flex align-items-center gap-2 mb-4">
             <div style={{background:'linear-gradient(135deg, #10b981, #059669)', color:'white', width:36, height:36, borderRadius:'10px', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(16,185,129,0.3)'}}>
@@ -2003,31 +2180,30 @@ function ReportsView({donations, cases, users, isAr}) {
         </div>
         <div className="card-body px-4 pb-4 pt-0">
           {topDonorsList.length===0
-            ?<Empty icon="bi-heart" title={isAr ? "لا توجد بيانات متبرعين" : "No donor data available"} sub={isAr ? "قم بتغيير نطاق التاريخ أو انتظار تسجيل تبرعات" : "Change date range or await new donations"} />
-            :<div className="d-flex flex-column gap-3 mt-3">
-              {topDonorsList.map(([name, data],i)=>(
-                <div key={i} className="d-flex align-items-center justify-content-between p-3 rounded-4" style={{background:'var(--bg-input)', border:'1px solid var(--border)', transition:'all 0.3s ease', cursor:'default'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 20px rgba(0,0,0,0.08)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none'}}>
-                  <div className="d-flex align-items-center gap-3">
-                    <div style={{position:'relative'}}>
-                      {data.photoURL ? (
-                        <img src={data.photoURL} alt={name} style={{width:44,height:44,borderRadius:'50%',objectFit:'cover',border:'2px solid var(--primary-light)'}} />
-                      ) : (
-                        <Av name={name} size={44} />
-                      )}
-                      <div style={{position:'absolute', bottom:-5, right:-5, width:20,height:20,borderRadius:'50%',fontSize:'.7rem',fontWeight:'bold',display:'flex',alignItems:'center',justifyContent:'center', background: i===0?'linear-gradient(135deg, #F59E0B, #FBBF24)':i===1?'linear-gradient(135deg, #9CA3AF, #D1D5DB)':i===2?'linear-gradient(135deg, #B45309, #D97706)':'var(--bg-dark)', color:i<3?'#fff':'var(--text-primary)', boxShadow:'0 2px 5px rgba(0,0,0,0.2)', border:'2px solid var(--bg-input)'}}>{i+1}</div>
+            ? <Empty icon="bi-heart" title={isAr ? 'لا توجد بيانات متبرعين' : 'No donor data'} sub={isAr ? 'قم بتغيير نطاق التاريخ أو انتظار تسجيل تبرعات' : 'Change the date range or wait for donations to be recorded'} />
+            : <div className="d-flex flex-column gap-3 mt-3">
+                {topDonorsList.map(([name, data],i)=>(
+                  <div key={i} className="d-flex align-items-center justify-content-between p-3 rounded-4" style={{background:'var(--bg-input)', border:'1px solid var(--border)', transition:'all 0.3s ease', cursor:'default'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 20px rgba(0,0,0,0.08)'}} onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none'}}>
+                    <div className="d-flex align-items-center gap-3">
+                      <div style={{position:'relative'}}>
+                        {data.photoURL
+                          ? <img src={data.photoURL} alt={name} style={{width:44,height:44,borderRadius:'50%',objectFit:'cover',border:'2px solid var(--primary-light)'}} />
+                          : <Av name={name} size={44} />
+                        }
+                        <div style={{position:'absolute', bottom:-5, right:-5, width:20,height:20,borderRadius:'50%',fontSize:'.7rem',fontWeight:'bold',display:'flex',alignItems:'center',justifyContent:'center', background: i===0?'linear-gradient(135deg, #F59E0B, #FBBF24)':i===1?'linear-gradient(135deg, #9CA3AF, #D1D5DB)':i===2?'linear-gradient(135deg, #B45309, #D97706)':'var(--bg-dark)', color:i<3?'#fff':'var(--text-primary)', boxShadow:'0 2px 5px rgba(0,0,0,0.2)', border:'2px solid var(--bg-input)'}}>{i+1}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'.85rem',fontWeight:800}}>{name}</div>
+                        <div className="text-xs text-muted">{isAr ? 'متبرع مميز' : 'Featured donor'}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div style={{fontSize:'.85rem',fontWeight:800}}>{name}</div>
-                      <div className="text-xs text-muted">{isAr ? 'متبرع مميز' : 'Top Donor'}</div>
+                    <div className="text-end">
+                      <div style={{fontWeight:800, color:'var(--primary-light)', fontSize:'1rem'}}>{data.amt.toLocaleString(isAr ? 'ar' : 'en')} {isAr ? 'ج.س' : 'SDG'}</div>
+                      <div className="text-xs text-muted">{isAr ? 'إجمالي المساهمات' : 'Total contributions'}</div>
                     </div>
                   </div>
-                  <div className="text-end">
-                    <div style={{fontWeight:800, color:'var(--primary-light)', fontSize:'1rem'}}>{data.amt.toLocaleString(isAr?'ar':'en')} {isAr ? 'ج.س' : 'SDG'}</div>
-                    <div className="text-xs text-muted">{isAr ? 'إجمالي المساهمات' : 'Total Contributions'}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
           }
         </div>
       </div>
@@ -2035,68 +2211,140 @@ function ReportsView({donations, cases, users, isAr}) {
   );
 }
 
-// ══════════════════════════════════════════
-// SHARES VIEW
-// ══════════════════════════════════════════
-function SharesView({shares, cases, isAr}) {
-  const [q,setQ]=useState('');
-  const filt=shares.filter(s=>!q||[s.caseTitle,s.platform,s.userId].join(' ').toLowerCase().includes(q.toLowerCase()));
+function SharesView({shares, cases, isAr, doDelShare, doClearShares}) {
+  const [search, setSearch] = useState('');
+  const [platformFilter, setPlatformFilter] = useState('all');
+  const platforms = [...new Set(shares.map(share => share.platform).filter(Boolean))].sort();
+  const platformCounts = shares.reduce((counts, share) => {
+    const platform = share.platform || (isAr ? 'غير محدد' : 'Unspecified');
+    counts[platform] = (counts[platform] || 0) + 1;
+    return counts;
+  }, {});
+  const topPlatforms = Object.entries(platformCounts).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const sharedCases = new Set(shares.map(share => share.caseId).filter(Boolean)).size;
+  const filteredShares = shares.filter(share => {
+    const relatedCase = cases.find(item => item.id === share.caseId);
+    const caseTitle = share.caseTitle || relatedCase?.title || '';
+    const queryText = search.trim().toLowerCase();
+    const matchesSearch = !queryText || [caseTitle, share.platform, share.userId, share.caseId]
+      .some(value => String(value || '').toLowerCase().includes(queryText));
+    return matchesSearch && (platformFilter === 'all' || share.platform === platformFilter);
+  });
 
-  const platformStats=shares.reduce((acc,s)=>{acc[s.platform]=(acc[s.platform]||0)+1;return acc},{});
-  const PLATFORM_ICONS={'WhatsApp':'bi-whatsapp','Twitter/X':'bi-twitter-x','Facebook':'bi-facebook',
-    'تيليغرام':'bi-telegram','نسخ الرابط':'bi-link-45deg'};
-
-  return(
-    <div className="page active">
-      {/* Platform stats */}
-      <div className="stats-grid">
-        {Object.entries(platformStats).map(([p,c],i)=>(
-          <div className="stat-card stat-blue" key={i}>
-            <div className="stat-icon"><i className={`bi ${PLATFORM_ICONS[p]||'bi-share'}`}></i></div>
-            <div>
-              <div className="stat-value">{c}</div>
-              <div className="stat-label">{p}</div>
-            </div>
+  return (
+    <div>
+      <div className="row g-3 mb-4">
+        <div className="col-12 col-md-4">
+          <div className="card p-3 h-100">
+            <div className="text-muted small">{isAr ? 'إجمالي المشاركات' : 'Total Shares'}</div>
+            <div className="fs-3 fw-bold mt-1">{shares.length.toLocaleString(isAr ? 'ar' : 'en')}</div>
           </div>
-        ))}
-        <div className="stat-card stat-red">
-          <div className="stat-icon"><i className="bi bi-share-fill"></i></div>
-          <div>
-            <div className="stat-value">{shares.length}</div>
-            <div className="stat-label">{isAr ? 'إجمالي المشاركات' : 'Total Shares'}</div>
+        </div>
+        <div className="col-12 col-md-4">
+          <div className="card p-3 h-100">
+            <div className="text-muted small">{isAr ? 'الحالات التي تمت مشاركتها' : 'Cases Shared'}</div>
+            <div className="fs-3 fw-bold mt-1">{sharedCases.toLocaleString(isAr ? 'ar' : 'en')}</div>
+          </div>
+        </div>
+        <div className="col-12 col-md-4">
+          <div className="card p-3 h-100">
+            <div className="text-muted small">{isAr ? 'وسائل المشاركة' : 'Platforms'}</div>
+            <div className="fs-3 fw-bold mt-1">{Object.keys(platformCounts).length.toLocaleString(isAr ? 'ar' : 'en')}</div>
           </div>
         </div>
       </div>
 
-      <div className="d-flex gap-2 mb-3">
-        <div className="search-wrap flex-fill" style={{maxWidth:340}}>
-          <i className="bi bi-search search-icon"></i>
-          <input className="search-input" placeholder={isAr ? "بحث في المشاركات..." : "Search shares..."} value={q} onChange={e=>setQ(e.target.value)} />
+      {topPlatforms.length > 0 && (
+        <div className="d-flex flex-wrap gap-2 mb-3">
+          {topPlatforms.map(([platform, count]) => (
+            <span key={platform} className="badge badge-approved">
+              <i className="bi bi-share-fill me-1"></i>{platform}: {count.toLocaleString(isAr ? 'ar' : 'en')}
+            </span>
+          ))}
         </div>
+      )}
+
+      <div className="donations-toolbar d-flex gap-2 mb-3 flex-wrap align-items-center justify-content-between">
+        <div className="d-flex gap-2 flex-wrap flex-fill">
+          <div className="search-wrap flex-fill" style={{maxWidth:360}}>
+            <i className="bi bi-search search-icon"></i>
+            <input
+              className="search-input"
+              type="search"
+              placeholder={isAr ? 'ابحث بالحالة أو المنصة أو المستخدم...' : 'Search case, platform, or user...'}
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+            />
+          </div>
+          <select
+            className="form-input"
+            style={{width:'auto',padding:'10px 14px'}}
+            value={platformFilter}
+            onChange={event => setPlatformFilter(event.target.value)}
+          >
+            <option value="all">{isAr ? 'كل المنصات' : 'All platforms'}</option>
+            {platforms.map(platform => <option key={platform} value={platform}>{platform}</option>)}
+          </select>
+        </div>
+        <button
+          type="button"
+          className="btn btn-outline-danger"
+          onClick={doClearShares}
+          disabled={shares.length === 0}
+        >
+          <i className="bi bi-trash3 me-1"></i>{isAr ? 'حذف جميع المشاركات' : 'Delete all shares'}
+        </button>
       </div>
 
       <div className="card">
         <div className="table-wrapper">
-          <table className="table">
-            <thead><tr><th>{isAr ? 'الحملة' : 'Campaign'}</th><th>{isAr ? 'المنصة' : 'Platform'}</th><th>{isAr ? 'المستخدم' : 'User'}</th><th>{isAr ? 'الوقت' : 'Time'}</th></tr></thead>
+          <table className="table table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>{isAr ? 'الحالة' : 'Case'}</th>
+                <th>{isAr ? 'وسيلة المشاركة' : 'Platform'}</th>
+                <th>{isAr ? 'المستخدم' : 'User'}</th>
+                <th>{isAr ? 'التاريخ' : 'Date'}</th>
+                <th>{isAr ? 'إجراءات' : 'Actions'}</th>
+              </tr>
+            </thead>
             <tbody>
-              {filt.length===0
-                ?<tr><td colSpan={4}><Empty icon="bi-share" title={isAr ? "لا توجد مشاركات بعد" : "No shares yet"} sub={isAr ? "ستظهر هنا مشاركات الحملات من التطبيق" : "Campaign shares from app will appear here"} /></td></tr>
-                :filt.map(s=>(
-                  <tr key={s.id}>
-                    <td style={{fontWeight:600,fontSize:'.78rem'}}>{s.caseTitle||s.caseId||'—'}</td>
-                    <td>
-                      <span className="badge badge-pending" style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                        <i className={`bi ${PLATFORM_ICONS[s.platform]||'bi-share'}`}></i>{s.platform}
-                      </span>
-                    </td>
-                    <td style={{fontSize:'.71rem',color:'var(--text-secondary)'}}>{s.userId?.slice(0,8)}...</td>
-                    <td style={{fontSize:'.7rem',color:'var(--text-secondary)',whiteSpace:'nowrap'}}>
-                      {s.timestamp?new Date(s.timestamp).toLocaleDateString(isAr?'ar-SA':'en-US'):'—'}
-                    </td>
-                  </tr>
-                ))
-              }
+              {filteredShares.length === 0
+                ? <tr><td colSpan={5}><Empty
+                    icon="bi-share"
+                    title={search ? (isAr ? 'لا توجد نتائج' : 'No results found') : (isAr ? 'لا توجد مشاركات بعد' : 'No shares yet')}
+                    sub={search ? (isAr ? 'جرّب عبارة بحث أخرى' : 'Try a different search') : (isAr ? 'ستظهر هنا مشاركات حملات التبرع' : 'Donation campaign shares will appear here')}
+                  /></td></tr>
+                : filteredShares.map(share => {
+                    const relatedCase = cases.find(item => item.id === share.caseId);
+                    return (
+                      <tr key={share.id}>
+                        <td data-label={isAr ? 'الحالة' : 'Case'} className="bold">
+                          {share.caseTitle || relatedCase?.title || share.caseId || '—'}
+                        </td>
+                        <td data-label={isAr ? 'وسيلة المشاركة' : 'Platform'}>
+                          <span className="badge badge-approved">{share.platform || '—'}</span>
+                        </td>
+                        <td data-label={isAr ? 'المستخدم' : 'User'} style={{fontSize:'.78rem',color:'var(--text-secondary)'}}>
+                          {share.userId || (isAr ? 'مستخدم مجهول' : 'Anonymous user')}
+                        </td>
+                        <td data-label={isAr ? 'التاريخ' : 'Date'} style={{fontSize:'.78rem',color:'var(--text-secondary)'}}>
+                          {formatDate(share.timestamp)}
+                        </td>
+                        <td data-label={isAr ? 'إجراءات' : 'Actions'}>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => doDelShare(share)}
+                            aria-label={isAr ? 'حذف المشاركة' : 'Delete share'}
+                            title={isAr ? 'حذف المشاركة' : 'Delete share'}
+                          >
+                            <i className="bi bi-trash3"></i>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
             </tbody>
           </table>
         </div>
@@ -2105,75 +2353,42 @@ function SharesView({shares, cases, isAr}) {
   );
 }
 
-// ══════════════════════════════════════════
-// VOLUNTEER ASSIGNMENT MODAL
-// ══════════════════════════════════════════
-function AssignVolunteerModal({caseItem, users, onClose, isAr}) {
-  const volunteers = users.filter(u => u.role === 'volunteer' && u.status !== 'suspended');
-  const [selectedVolId, setSelectedVolId] = useState(caseItem.volunteerId || '');
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      await updateDoc(doc(db, 'cases', caseItem.id), {
-        assignedVolunteerId: selectedVolId || null,
-        volunteerId: selectedVolId || null,
-        status: selectedVolId ? 'assigned' : (caseItem.status === 'assigned' ? 'approved' : caseItem.status),
-        assignedAt: selectedVolId ? serverTimestamp() : null,
-        updatedAt: serverTimestamp()
-      });
-      showToast('success', isAr ? 'تم التعيين' : 'Assigned', isAr ? 'تم تحديث المتطوع المعين للحالة' : 'Volunteer assigned successfully');
-      onClose();
-    } catch(e) {
-      showToast('error', isAr ? 'خطأ' : 'Error', e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal title={isAr ? "تعيين متطوع للحالة" : "Assign Volunteer to Case"} icon="bi-person-check-fill" onClose={onClose}
-      footer={<>
-        <button className="btn btn-outline" onClick={onClose}>{isAr ? 'إلغاء' : 'Cancel'}</button>
-        <button className="btn btn-primary" onClick={save} disabled={saving}>
-          {saving ? (isAr ? 'جاري الحفظ...' : 'Saving...') : (isAr ? 'حفظ التعيين' : 'Save Assignment')}
-        </button>
-      </>}>
-      <div className="mb-3">
-        <label className="form-label">{isAr ? "الحالة المستهدفة" : "Target Case"}</label>
-        <div className="form-input" style={{background:'rgba(255,255,255,0.03)'}}>{caseItem.title}</div>
-      </div>
-      <div className="mb-3">
-        <label className="form-label">{isAr ? "اختر متطوعاً" : "Select Volunteer"}</label>
-        <select className="form-input" value={selectedVolId} onChange={e => setSelectedVolId(e.target.value)}>
-          <option value="">-- {isAr ? 'إلغاء تعيين المتطوع' : 'Unassign Volunteer'} --</option>
-          {volunteers.map(v => (
-            <option key={v.id} value={v.id || v.uid}>{v.name} ({v.email})</option>
-          ))}
-        </select>
-      </div>
-      {volunteers.length === 0 && (
-        <div style={{color:'var(--gold)', fontSize:'0.8rem', marginTop:'8px'}}>
-          <i className="bi bi-exclamation-triangle-fill me-1"></i>
-          {isAr ? 'لا يوجد متطوعين نشطين مسجلين في النظام حالياً.' : 'No active volunteers registered in the system currently.'}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-// ══════════════════════════════════════════
-// VERIFICATIONS VIEW — Admin: Review identity docs
-// ══════════════════════════════════════════
-// ══════════════════════════════════════════
-// VERIFICATIONS VIEW — Admin: Review identity docs
-// ══════════════════════════════════════════
-function VerificationsView({verifications, doDelVerification, isAr}) {
+function VerificationsView({verifications, users, doDelVerification, doToggle, doDelUser, doChangeRole, isAr}) {
+  const [mainTab, setMainTab] = useState('volunteers');
   const [filter,setFilter] = useState('pending');
+  const [volFilter, setVolFilter] = useState('all'); // volunteer status filter
+  const [volSearch, setVolSearch] = useState('');
   const [selected,setSelected] = useState(null);
   const [adminNote,setAdminNote] = useState('');
   const [saving,setSaving] = useState(false);
+
+  const volunteers = (users || []).filter(u =>
+    [u.role, u.accountType].some(role => String(role || '').trim().toLowerCase() === 'volunteer')
+  );
+  const getVolVerification = (vol) => verifications.find(v => v.uid === vol.uid || v.uid === vol.id);
+  const getVolVerificationStatus = (vol) => {
+    const verification = getVolVerification(vol);
+    if (verification?.verificationStatus) return verification.verificationStatus;
+    if (vol.verificationStatus) return vol.verificationStatus;
+    if (vol.status === 'active') return 'approved';
+    if (vol.status === 'rejected') return 'rejected';
+    if (vol.status === 'pending_verification') return 'pending';
+    return null;
+  };
+  const filteredVols = volunteers.filter(v => {
+    const matchSearch = !volSearch || [v.name,v.email,v.phone].join(' ').toLowerCase().includes(volSearch.toLowerCase());
+    const verificationStatus = getVolVerificationStatus(v);
+    const matchStatus = volFilter === 'all'
+      || (volFilter === 'active' && (verificationStatus === 'approved' || v.status === 'active'))
+      || (volFilter === 'pending' && (verificationStatus === 'pending' || v.status === 'pending'))
+      || (volFilter === 'suspended' && v.status === 'suspended')
+      || (volFilter === 'rejected' && verificationStatus === 'rejected');
+    return matchSearch && matchStatus;
+  });
+  const approvedVerificationCount = new Set([
+    ...verifications.filter(v => v.verificationStatus === 'approved').map(v => v.uid || v.id).filter(Boolean),
+    ...volunteers.filter(v => getVolVerificationStatus(v) === 'approved').map(v => v.uid || v.id).filter(Boolean),
+  ]).size;
 
   const DOC_LABELS = isAr ? {
     national_id: 'بطاقة وطنية',
@@ -2186,7 +2401,7 @@ function VerificationsView({verifications, doDelVerification, isAr}) {
     driving_license: 'Driving License',
     birth_cert: 'Birth Certificate',
   };
-  const ROLE_LABELS = isAr 
+  const ROLE_LABELS = isAr
     ? { beneficiary: 'مستفيد', volunteer: 'متطوع' }
     : { beneficiary: 'Beneficiary', volunteer: 'Volunteer' };
 
@@ -2214,14 +2429,22 @@ function VerificationsView({verifications, doDelVerification, isAr}) {
     finally { setSaving(false); }
   };
 
+  const volStatusMap = {
+    active:    {c:'badge-approved', l:isAr?'نشط':'Active',       i:'bi-check-circle-fill', dot:'#66BB6A'},
+    suspended: {c:'badge-rejected', l:isAr?'موقوف':'Suspended',  i:'bi-slash-circle-fill', dot:'#ef5350'},
+    pending:   {c:'badge-pending',  l:isAr?'معلق':'Pending',     i:'bi-hourglass-split',   dot:'#f9a825'},
+    rejected:  {c:'badge-rejected', l:isAr?'مرفوض':'Rejected',   i:'bi-x-circle-fill',     dot:'#ef5350'},
+  };
+
   return (
     <div>
       {/* Stats */}
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+      <div className="verification-stats stats-grid" style={{marginBottom: 24}}>
         {[
-          {l:isAr?'في الانتظار':'Pending', v:verifications.filter(v=>v.verificationStatus==='pending').length, c:'stat-gold', i:'bi-hourglass-split'},
-          {l:isAr?'مقبولة':'Approved',      v:verifications.filter(v=>v.verificationStatus==='approved').length, c:'stat-green', i:'bi-shield-check'},
-          {l:isAr?'مرفوضة':'Rejected',     v:verifications.filter(v=>v.verificationStatus==='rejected').length, c:'stat-red',  i:'bi-shield-x'},
+          {l:isAr?'طلبات التحقق':'Verification Reqs', v:verifications.length, c:'stat-blue', i:'bi-shield-lock'},
+          {l:isAr?'في الانتظار':'Pending',             v:verifications.filter(v=>v.verificationStatus==='pending').length, c:'stat-gold', i:'bi-hourglass-split'},
+          {l:isAr?'مقبولة':'Approved',                 v:approvedVerificationCount, c:'stat-green', i:'bi-shield-check'},
+          {l:isAr?'إجمالي المتطوعين':'Total Volunteers', v:volunteers.length, c:'stat-green', i:'bi-people-fill'},
         ].map((s,i) => (
           <div className={`stat-card ${s.c}`} key={i}>
             <div className="stat-icon"><i className={`bi ${s.i}`}></i></div>
@@ -2230,64 +2453,254 @@ function VerificationsView({verifications, doDelVerification, isAr}) {
         ))}
       </div>
 
-      {/* Filter tabs */}
-      <div className="d-flex gap-2 mb-4 flex-wrap">
-        {[['all',isAr?'الكل':'All'],['pending',isAr?'معلق':'Pending'],['approved',isAr?'مقبول':'Approved'],['rejected',isAr?'مرفوض':'Rejected']].map(([v,l])=>(
-          <button key={v} className={`btn btn-sm ${filter===v?'btn-primary':'btn-outline'}`} onClick={()=>setFilter(v)}>{l}</button>
-        ))}
+      {/* Main tabs */}
+      <div className="verification-tab-list d-flex gap-2 mb-4" style={{borderBottom:'1px solid var(--border)', paddingBottom:0}}>
+        <button
+          className={`btn btn-sm ${mainTab==='verifications'?'btn-primary':'btn-ghost'}`}
+          style={{borderRadius:'8px 8px 0 0', borderBottom: mainTab==='verifications' ? '2px solid var(--primary)' : '2px solid transparent'}}
+          onClick={()=>setMainTab('verifications')}
+        >
+          <i className="bi bi-shield-check me-1"></i>
+          {isAr ? 'طلبات التحقق من الهوية' : 'ID Verification Requests'}
+          {verifications.filter(v=>v.verificationStatus==='pending').length > 0 && (
+            <span className="nav-badge ms-2">{verifications.filter(v=>v.verificationStatus==='pending').length}</span>
+          )}
+        </button>
+        <button
+          className={`btn btn-sm ${mainTab==='volunteers'?'btn-primary':'btn-ghost'}`}
+          style={{borderRadius:'8px 8px 0 0', borderBottom: mainTab==='volunteers' ? '2px solid var(--primary)' : '2px solid transparent'}}
+          onClick={()=>setMainTab('volunteers')}
+        >
+          <i className="bi bi-people-fill me-1"></i>
+          {isAr ? 'قائمة المتطوعين' : 'Volunteers List'}
+          <span className="nav-badge ms-2" style={{background:'rgba(102,187,106,0.2)',color:'#66BB6A'}}>{volunteers.length}</span>
+        </button>
       </div>
 
-      {/* List */}
-      {filtered.length === 0
-        ? <div className="card"><Empty icon="bi-shield-check" title={isAr ? "لا توجد طلبات" : "No requests"} sub={isAr ? "لا توجد طلبات تحقق بهذه الحالة" : "No verification requests under this status"} /></div>
-        : <div className="row g-3">
-            {filtered.map(v => {
-              const statusMap = {
-                pending:  {c:'badge-pending',  l:isAr?'معلق':'Pending',   i:'bi-hourglass-split'},
-                approved: {c:'badge-approved', l:isAr?'مقبول':'Approved',  i:'bi-check-circle-fill'},
-                rejected: {c:'badge-rejected', l:isAr?'مرفوض':'Rejected', i:'bi-x-circle-fill'},
-              };
-              const st = statusMap[v.verificationStatus] || statusMap.pending;
-              return (
-                <div className="col-lg-6" key={v.id}>
-                  <div className="card" style={{cursor:'pointer'}} onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}}>
-                    <div className="card-body">
-                      <div className="d-flex align-items-center gap-3 mb-3">
-                        {v.docFrontURL
-                          ? <img src={v.docFrontURL} alt="وثيقة" style={{width:48,height:48,borderRadius:10,objectFit:'cover',border:'1px solid var(--border)'}} />
-                          : <div className="avatar" style={{width:48,height:48,borderRadius:10}}>{ini(v.name)}</div>
-                        }
-                        <div style={{flex:1}}>
-                          <div className="bold">{v.name}</div>
-                          <div className="text-sm text-muted">{v.email}</div>
-                        </div>
-                        <div className="d-flex flex-column align-items-end gap-1">
-                          <span className={`badge badge-supervisor`}>{ROLE_LABELS[v.role]||v.role}</span>
-                          <span className={`badge ${st.c}`}><i className={`bi ${st.i}`} style={{fontSize:'.6rem'}}></i> {st.l}</span>
-                        </div>
-                      </div>
-                      <div className="d-flex gap-3 text-sm text-muted">
-                        <span><i className="bi bi-credit-card me-1"></i>{DOC_LABELS[v.docType]||v.docType}</span>
-                        <span><i className="bi bi-hash me-1"></i>{v.docNumber}</span>
-                        {v.docCountry && <span><i className="bi bi-geo-alt me-1"></i>{v.docCountry}</span>}
-                      </div>
-                      {v.reason && <div className="mt-2 text-sm" style={{color:'var(--text-secondary)',fontStyle:'italic'}}>"{v.reason}"</div>}
-                      <div className="d-flex align-items-center justify-content-between mt-3 pt-3" style={{borderTop:'1px solid var(--border)'}}>
-                        <div className="text-xs text-muted">{timeAgo(v.submittedAt)}</div>
-                        <div className="d-flex gap-2" onClick={e=>e.stopPropagation()}>
-                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}} title={isAr ? "معاينة وتعديل" : "Preview & Edit"}><i className="bi bi-pencil"></i></button>
-                          <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelVerification(v.id, v.name)} title={isAr ? "حذف الطلب" : "Delete Request"}><i className="bi bi-trash"></i></button>
+      {/* ── TAB: VERIFICATIONS ── */}
+      {mainTab === 'verifications' && (
+        <div>
+          {/* Filter tabs */}
+          <div className="verification-filter-list d-flex gap-2 mb-4 flex-wrap">
+            {[['all',isAr?'الكل':'All'],['pending',isAr?'معلق':'Pending'],['approved',isAr?'مقبول':'Approved'],['rejected',isAr?'مرفوض':'Rejected']].map(([v,l])=>(
+              <button key={v} className={`btn btn-sm ${filter===v?'btn-primary':'btn-outline'}`} onClick={()=>setFilter(v)}>{l}</button>
+            ))}
+          </div>
+
+          {filtered.length === 0
+            ? <div className="card"><Empty icon="bi-shield-check" title={isAr ? "لا توجد طلبات" : "No requests"} sub={isAr ? "لا توجد طلبات تحقق بهذه الحالة" : "No verification requests under this status"} /></div>
+            : <div className="row g-3">
+                {filtered.map(v => {
+                  const statusMap = {
+                    pending:  {c:'badge-pending',  l:isAr?'معلق':'Pending',   i:'bi-hourglass-split'},
+                    approved: {c:'badge-approved', l:isAr?'مقبول':'Approved',  i:'bi-check-circle-fill'},
+                    rejected: {c:'badge-rejected', l:isAr?'مرفوض':'Rejected', i:'bi-x-circle-fill'},
+                  };
+                  const st = statusMap[v.verificationStatus] || statusMap.pending;
+                  return (
+                    <div className="col-lg-6" key={v.id}>
+                      <div className="card" style={{cursor:'pointer'}} onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}}>
+                        <div className="card-body">
+                          <div className="d-flex align-items-center gap-3 mb-3">
+                            {v.docFrontURL
+                              ? <img src={v.docFrontURL} alt="وثيقة" style={{width:48,height:48,borderRadius:10,objectFit:'cover',border:'1px solid var(--border)'}} />
+                              : <div className="avatar" style={{width:48,height:48,borderRadius:10}}>{ini(v.name)}</div>
+                            }
+                            <div style={{flex:1}}>
+                              <div className="bold">{v.name}</div>
+                              <div className="text-sm text-muted">{v.email}</div>
+                            </div>
+                            <div className="d-flex flex-column align-items-end gap-1">
+                              <span className={`badge badge-supervisor`}>{ROLE_LABELS[v.role]||v.role}</span>
+                              <span className={`badge ${st.c}`}><i className={`bi ${st.i}`} style={{fontSize:'.6rem'}}></i> {st.l}</span>
+                            </div>
+                          </div>
+                          <div className="d-flex gap-3 text-sm text-muted">
+                            <span><i className="bi bi-credit-card me-1"></i>{DOC_LABELS[v.docType]||v.docType}</span>
+                            <span><i className="bi bi-hash me-1"></i>{v.docNumber}</span>
+                            {v.docCountry && <span><i className="bi bi-geo-alt me-1"></i>{v.docCountry}</span>}
+                          </div>
+                          {v.reason && <div className="mt-2 text-sm" style={{color:'var(--text-secondary)',fontStyle:'italic'}}>"{ v.reason}"</div>}
+                          <div className="d-flex align-items-center justify-content-between mt-3 pt-3" style={{borderTop:'1px solid var(--border)'}}>
+                            <div className="text-xs text-muted">{timeAgo(v.submittedAt)}</div>
+                            <div className="d-flex gap-2" onClick={e=>e.stopPropagation()}>
+                              <button className="btn btn-outline btn-icon btn-sm" onClick={()=>{setSelected(v);setAdminNote(v.adminNote||'');}} title={isAr ? "معاينة وتعديل" : "Preview & Edit"}><i className="bi bi-pencil"></i></button>
+                              <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelVerification(v.id, v.name)} title={isAr ? "حذف الطلب" : "Delete Request"}><i className="bi bi-trash"></i></button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-      }
+                  );
+                })}
+              </div>
+          }
+        </div>
+      )}
 
-      {/* Detail Modal */}
+      {/* ── TAB: VOLUNTEERS LIST ── */}
+      {mainTab === 'volunteers' && (
+        <div>
+          {/* Search + Filter */}
+          <div className="volunteer-toolbar verification-filter-list d-flex gap-2 mb-4 flex-wrap align-items-center">
+            <div className="volunteer-search search-wrap flex-fill" style={{maxWidth:300}}>
+              <i className="bi bi-search search-icon"></i>
+              <input
+                className="search-input"
+                type="text"
+                placeholder={isAr ? 'بحث بالاسم أو البريد أو الهاتف...' : 'Search by name, email or phone...'}
+                value={volSearch}
+                onChange={e=>setVolSearch(e.target.value)}
+              />
+            </div>
+            {[['all',isAr?'الكل':'All'],['active',isAr?'مقبول / نشط':'Approved / Active'],['pending',isAr?'قيد المراجعة':'Pending'],['suspended',isAr?'موقوف':'Suspended'],['rejected',isAr?'مرفوض':'Rejected']].map(([v,l])=>(
+              <button key={v} className={`btn btn-sm ${volFilter===v?'btn-primary':'btn-outline'}`} onClick={()=>setVolFilter(v)}>{l}</button>
+            ))}
+            <span className="text-muted text-sm ms-auto">{isAr ? `${filteredVols.length} متطوع` : `${filteredVols.length} volunteers`}</span>
+          </div>
+
+          {filteredVols.length === 0
+            ? <div className="card"><Empty icon="bi-people" title={isAr ? 'لا يوجد متطوعون' : 'No Volunteers'} sub={isAr ? 'لم يتم تسجيل أي متطوع بعد' : 'No volunteers registered yet'} /></div>
+            : (
+              <div className="card p-0">
+                <div className="volunteer-table-responsive table-responsive">
+                  <table className="volunteer-table table table-hover align-middle mb-0" style={{fontSize:'.83rem'}}>
+                    <thead>
+                      <tr>
+                        <th style={{paddingRight:20}}>{isAr ? 'المتطوع' : 'Volunteer'}</th>
+                        <th>{isAr ? 'التواصل' : 'Contact'}</th>
+                        <th>{isAr ? 'التحقق من الهوية' : 'ID Verification'}</th>
+                        <th>{isAr ? 'الحالة' : 'Status'}</th>
+                        <th>{isAr ? 'تاريخ التسجيل' : 'Joined'}</th>
+                        <th style={{width:205}}>{isAr ? 'إجراءات' : 'Actions'}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredVols.map(vol => {
+                        const verif = getVolVerification(vol);
+                        const verificationStatus = getVolVerificationStatus(vol);
+                        const volunteerStatus = vol.status === 'suspended'
+                          ? 'suspended'
+                          : verificationStatus === 'approved'
+                            ? 'active'
+                            : verificationStatus === 'rejected'
+                              ? 'rejected'
+                              : verificationStatus === 'pending'
+                                ? 'pending'
+                                : vol.status;
+                        const st = volStatusMap[volunteerStatus] || volStatusMap.pending;
+                        const verifStatusMap = {
+                          approved: {c:'badge-approved', l:isAr?'موثّق':'Verified',   i:'bi-patch-check-fill'},
+                          rejected: {c:'badge-rejected', l:isAr?'مرفوض':'Rejected',  i:'bi-x-circle-fill'},
+                          pending:  {c:'badge-pending',  l:isAr?'قيد المراجعة':'Under Review', i:'bi-hourglass-split'},
+                        };
+                        const vs = verificationStatus
+                          ? (verifStatusMap[verificationStatus] || verifStatusMap.pending)
+                          : null;
+                        return (
+                          <tr key={vol.id}>
+                            {/* Avatar + Name */}
+                            <td data-label={isAr ? 'المتطوع' : 'Volunteer'} style={{paddingRight:20}}>
+                              <div className="d-flex align-items-center gap-3">
+                                {vol.photoURL
+                                  ? <img src={vol.photoURL} alt={vol.name} style={{width:40,height:40,borderRadius:'50%',objectFit:'cover',border:'2px solid var(--border)',background:'#fff'}} />
+                                  : <div className="avatar" style={{width:40,height:40,flexShrink:0}}>{ini(vol.name)}</div>
+                                }
+                                <div style={{minWidth:0}}>
+                                  <div className="bold truncate" style={{maxWidth:160}}>{vol.name || '—'}</div>
+                                  <div className="text-xs text-muted">{isAr ? 'متطوع' : 'Volunteer'}</div>
+                                </div>
+                              </div>
+                            </td>
+                            {/* Contact */}
+                            <td data-label={isAr ? 'التواصل' : 'Contact'}>
+                              <div className="text-sm" style={{color:'var(--text-secondary)'}}>
+                                <div><i className="bi bi-envelope me-1"></i>{vol.email || '—'}</div>
+                                {vol.phone && <div className="mt-1"><i className="bi bi-telephone me-1"></i>{vol.phone}</div>}
+                              </div>
+                            </td>
+                            {/* Verification */}
+                            <td data-label={isAr ? 'التحقق من الهوية' : 'ID Verification'}>
+                              {vs
+                                ? <span className={`badge ${vs.c}`}><i className={`bi ${vs.i} me-1`} style={{fontSize:'.65rem'}}></i>{vs.l}</span>
+                                : <span className="text-muted text-xs"><i className="bi bi-dash-circle me-1"></i>{isAr ? 'لا يوجد طلب' : 'Not submitted'}</span>
+                              }
+                              {verif && verif.docType && (
+                                <div className="text-xs text-muted mt-1">{DOC_LABELS[verif.docType] || verif.docType}</div>
+                              )}
+                            </td>
+                            {/* Status */}
+                            <td data-label={isAr ? 'الحالة' : 'Status'}>
+                              <span className={`badge ${st.c}`}>
+                                <span style={{width:6,height:6,borderRadius:'50%',background:st.dot,display:'inline-block',marginLeft:4,marginRight:2}}></span>
+                                {st.l}
+                              </span>
+                            </td>
+                            {/* Joined */}
+                            <td data-label={isAr ? 'تاريخ التسجيل' : 'Joined'} className="text-muted text-xs" style={{whiteSpace:'nowrap'}}>
+                              {vol.createdAt?.toDate
+                                ? vol.createdAt.toDate().toLocaleDateString(isAr?'ar-SA':'en-US')
+                                : vol.createdAt ? new Date(vol.createdAt).toLocaleDateString(isAr?'ar-SA':'en-US') : '—'
+                              }
+                            </td>
+                            {/* Actions */}
+                            <td data-label={isAr ? 'إجراءات' : 'Actions'}>
+                              <div className="volunteer-actions d-grid gap-1">
+                                {/* Toggle status */}
+                                <button
+                                  className={`btn btn-icon btn-sm ${volunteerStatus==='active'?'btn-reject':'btn-approve'}`}
+                                  onClick={()=>doToggle(vol.id,volunteerStatus,vol.name,vol.role)}
+                                  title={volunteerStatus==='active'?(isAr?'تعليق الحساب':'Suspend'):(isAr?'تفعيل الحساب':'Activate')}
+                                >
+                                  <i className={`bi ${volunteerStatus==='active'?'bi-lock-fill':'bi-unlock-fill'}`}></i>
+                                </button>
+                                {/* View verification */}
+                                {verif && (
+                                  <button
+                                    className="btn btn-outline btn-icon btn-sm"
+                                    onClick={()=>{setSelected(verif);setAdminNote(verif.adminNote||'');setMainTab('verifications');}}
+                                    title={isAr ? 'عرض طلب التحقق' : 'View Verification'}
+                                    style={{color:'var(--primary-light)'}}
+                                  >
+                                    <i className="bi bi-shield-check"></i>
+                                  </button>
+                                )}
+                                {/* Change role */}
+                                <select
+                                  className="form-input btn btn-sm btn-outline"
+                                  style={{padding:'4px 6px',fontSize:'0.72rem',width:'100%',minWidth:0,height:32}}
+                                  value={vol.role || vol.accountType || 'volunteer'}
+                                  onChange={e=>doChangeRole(vol.id,vol.name,e.target.value)}
+                                  title={isAr ? 'تغيير الدور' : 'Change Role'}
+                                >
+                                  <option value="volunteer">{isAr?'متطوع':'Volunteer'}</option>
+                                  <option value="donor">{isAr?'متبرع':'Donor'}</option>
+                                  <option value="beneficiary">{isAr?'مستفيد':'Beneficiary'}</option>
+                                  <option value="employee">{isAr?'موظف':'Employee'}</option>
+                                </select>
+                                {/* Delete */}
+                                <button
+                                  className="btn btn-reject btn-icon btn-sm"
+                                  onClick={()=>doDelUser(vol.id,vol.name,vol.role)}
+                                  title={isAr ? 'حذف المتطوع' : 'Delete Volunteer'}
+                                >
+                                  <i className="bi bi-trash3"></i>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          }
+        </div>
+      )}
+
+      {/* Detail Modal (shared by both tabs) */}
       {selected && (
         <Modal title={isAr ? "تفاصيل طلب التحقق" : "Verification Request Details"} icon="bi-shield-check" onClose={()=>{setSelected(null);setAdminNote('');}}
           footer={
@@ -2308,8 +2721,6 @@ function VerificationsView({verifications, doDelVerification, isAr}) {
             <div className="col-md-6"><div className="modal-label">{isAr ? 'البلد' : 'Country'}</div><div>{selected.docCountry||'—'}</div></div>
             {selected.docExpiry && <div className="col-md-6"><div className="modal-label">{isAr ? 'تاريخ الانتهاء' : 'Expiry Date'}</div><div>{selected.docExpiry}</div></div>}
             {selected.reason && <div className="col-12"><div className="modal-label">{isAr ? 'السبب / المهارات' : 'Reason / Skills'}</div><div style={{lineHeight:1.7}}>{selected.reason}</div></div>}
-
-            {/* Document Images */}
             {selected.docFrontURL && (
               <div className="col-md-6">
                 <div className="modal-label">{isAr ? 'صورة الوجه الأمامي' : 'Front Image'}</div>
@@ -2326,14 +2737,11 @@ function VerificationsView({verifications, doDelVerification, isAr}) {
                 </a>
               </div>
             )}
-
-            {selected.verificationStatus === 'pending' || true ? (
-              <div className="col-12">
-                <div className="modal-label">{isAr ? 'ملاحظة المدير / سبب القبول أو الرفض (اختياري)' : 'Admin Notes / Reason (Optional)'}</div>
-                <textarea className="form-input" rows={2} value={adminNote} onChange={e=>setAdminNote(e.target.value)}
-                  placeholder={isAr ? "سبب القبول أو الرفض..." : "Approval or rejection note..."} style={{resize:'vertical'}} />
-              </div>
-            ) : null}
+            <div className="col-12">
+              <div className="modal-label">{isAr ? 'ملاحظة المدير / سبب القبول أو الرفض (اختياري)' : 'Admin Notes / Reason (Optional)'}</div>
+              <textarea className="form-input" rows={2} value={adminNote} onChange={e=>setAdminNote(e.target.value)}
+                placeholder={isAr ? "سبب القبول أو الرفض..." : "Approval or rejection note..."} style={{resize:'vertical'}} />
+            </div>
           </div>
         </Modal>
       )}
@@ -2381,7 +2789,7 @@ function ActivityView({logs, doDelLog, doClearLogs, isAr}) {
                       <td><div className="d-flex align-items-center gap-2"><Av name={log.adminName} size={24} />{log.adminName}</div></td>
                       <td><span className="badge badge-approved">{log.action}</span></td>
                       <td style={{maxWidth:250,whiteSpace:'normal'}}>{log.details}</td>
-                      <td className="text-muted" style={{minWidth:120}}>{log.timestamp ? formatDate(log.timestamp.toDate(),true) : '—'}</td>
+                      <td className="text-muted" style={{minWidth:120}}>{formatDate(log.timestamp)}</td>
                       <td>
                         <button className="btn btn-outline btn-icon btn-sm" style={{color:'var(--red)',borderColor:'transparent'}} onClick={()=>doDelLog(log.id)} title={isAr ? "حذف السجل" : "Delete Log"}>
                           <i className="bi bi-trash"></i>
@@ -2408,11 +2816,12 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
     min_app_version: sysSettings?.min_app_version || '1.0.0',
     app_maintenance_mode: sysSettings?.app_maintenance_mode || false,
     play_store_link: sysSettings?.play_store_link || '',
-    
+    apk_url: sysSettings?.apk_url || '',
+
     web_maintenance_mode: sysSettings?.web_maintenance_mode || false,
     contact_email: sysSettings?.contact_email || '',
     contact_phone: sysSettings?.contact_phone || '',
-    
+
     facebook_url: sysSettings?.facebook_url || '',
     twitter_url: sysSettings?.twitter_url || '',
     instagram_url: sysSettings?.instagram_url || '',
@@ -2434,19 +2843,20 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
         min_app_version: sysSettings.min_app_version || '1.0.0',
         app_maintenance_mode: sysSettings.app_maintenance_mode || false,
         play_store_link: sysSettings.play_store_link || '',
-        
+        apk_url: sysSettings.apk_url || '',
+
         web_maintenance_mode: sysSettings.web_maintenance_mode || false,
         contact_email: sysSettings.contact_email || '',
         contact_phone: sysSettings.contact_phone || '',
-        
+
         facebook_url: sysSettings.facebook_url || '',
         twitter_url: sysSettings.twitter_url || '',
         instagram_url: sysSettings.instagram_url || '',
-    
+
         bank_name: sysSettings.bank_name || (isAr ? 'بنك الخرطوم' : 'Bank of Khartoum'),
         bank_account: sysSettings.bank_account || '',
         bank_holder: sysSettings.bank_holder || '',
-    
+
         about_us_text: sysSettings.about_us_text || '',
         privacy_policy_url: sysSettings.privacy_policy_url || '',
         terms_url: sysSettings.terms_url || ''
@@ -2474,7 +2884,7 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
           <div style={{fontSize:'.65rem',color:'var(--text-secondary)'}}>{isAr ? 'التحكم الكامل في إعدادات التطبيق والموقع وحسابات الجمعية' : 'Full control over app, site, and organization settings'}</div>
         </div>
       </div>
-      
+
       <div className="row g-4">
         {/* التطبيق */}
         <div className="col-md-6">
@@ -2496,6 +2906,10 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
               <div className="form-group mb-0">
                 <label className="form-label">{isAr ? 'رابط التطبيق على Google Play' : 'Google Play Store Link'}</label>
                 <input className="form-input" value={f.play_store_link} onChange={up('play_store_link')} placeholder="https://play.google.com/store/apps/details?id=..." dir="ltr" style={{textAlign:'left'}} />
+              </div>
+              <div className="form-group mt-3 mb-0">
+                <label className="form-label"><i className="bi bi-download me-1"></i>{isAr ? 'رابط تحميل APK المباشر' : 'Direct APK Download Link'}</label>
+                <input className="form-input" value={f.apk_url} onChange={up('apk_url')} placeholder="https://.../takaful.apk" dir="ltr" style={{textAlign:'left'}} />
               </div>
             </div>
           </div>
@@ -2584,7 +2998,7 @@ function SettingsView({sysSettings, logActivity, cases, users, donations, activi
             </div>
           </div>
         </div>
-        
+
         {/* النسخ الاحتياطي وتصدير البيانات */}
         <div className="col-12">
           <div className="card">
@@ -2653,7 +3067,8 @@ function TrackingView({users, cases, isAr}) {
   const leafletMap = useRef(null);
   const markersRef = useRef({});
   const [locations, setLocations] = useState([]);
-  
+  const [selectedId, setSelectedId] = useState(null);
+
   // Listen to volunteer locations
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'volunteerLocations'), (snapshot) => {
@@ -2674,21 +3089,45 @@ function TrackingView({users, cases, isAr}) {
     }
   }, []);
 
-  // Update Markers
+  const now = Date.now();
+  const formatLocationAge = timestamp => {
+    const age = Math.max(0, Math.floor((now - Number(timestamp || 0)) / 1000));
+    if (age < 60) return isAr ? 'الآن' : 'Just now';
+    if (age < 3600) return isAr ? `منذ ${Math.floor(age / 60)} د` : `${Math.floor(age / 60)} min ago`;
+    return isAr ? `منذ ${Math.floor(age / 3600)} س` : `${Math.floor(age / 3600)} hr ago`;
+  };
+  const visibleLocations = locations.filter(loc => {
+    const last = Number(loc.timestamp || 0);
+    return loc.isOnline !== false && last > 0 && now - last < 2 * 60 * 1000;
+  });
+
+  // Update markers and remove stale markers from the map.
   useEffect(() => {
     if (!leafletMap.current) return;
     const map = leafletMap.current;
 
-    locations.forEach(loc => {
+    const activeIds = new Set(visibleLocations.map(loc => loc.id));
+    Object.keys(markersRef.current).forEach(id => {
+      if (!activeIds.has(id)) {
+        markersRef.current[id].remove();
+        delete markersRef.current[id];
+      }
+    });
+
+    visibleLocations.forEach(loc => {
       const { id, latitude, longitude, timestamp } = loc;
       const user = users.find(u => u.uid === id || u.id === id);
       const name = user ? user.name : (isAr ? 'متطوع غير معروف' : 'Unknown Volunteer');
-      
-      const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString(isAr?'ar-SA':'en-US') : (isAr ? 'غير معروف' : 'Unknown');
+      const taskIds = Array.isArray(loc.activeTaskIds) ? loc.activeTaskIds : [];
+      const task = cases.find(c => taskIds.includes(c.id) || c.volunteerId === id || c.assignedVolunteerId === id);
+      const age = Math.max(0, Math.floor((Date.now() - Number(timestamp || 0)) / 1000));
+      const ageText = age < 60 ? (isAr ? 'الآن' : 'Just now') : (isAr ? `منذ ${Math.floor(age/60)} د` : `${Math.floor(age/60)} min ago`);
+
+      const popup = `<b>${name}</b><br/>${task ? `${isAr?'المهمة:':'Task:'} ${task.title}<br/>` : ''}${isAr?'آخر تحديث:':'Last update:'} ${ageText}<br/>${isAr?'الدقة:':'Accuracy:'} ${Math.round(Number(loc.accuracy || 0))}m`;
 
       if (markersRef.current[id]) {
         markersRef.current[id].setLatLng([latitude, longitude]);
-        markersRef.current[id].setPopupContent(`<b>${name}</b><br/>${isAr?'آخر تحديث:':'Last update:'} ${timeStr}`);
+        markersRef.current[id].setPopupContent(popup);
       } else {
         const customIcon = L.divIcon({
           html: `<div style="font-size: 24px; color: var(--primary);"><i class="bi bi-car-front-fill"></i></div>`,
@@ -2697,32 +3136,58 @@ function TrackingView({users, cases, isAr}) {
           iconAnchor: [15, 30]
         });
         const marker = L.marker([latitude, longitude], {icon: customIcon}).addTo(map);
-        marker.bindPopup(`<b>${name}</b><br/>${isAr?'آخر تحديث:':'Last update:'} ${timeStr}`);
+        marker.bindPopup(popup);
+        marker.on('click', () => setSelectedId(id));
         markersRef.current[id] = marker;
       }
     });
 
-    if (locations.length > 0 && leafletMap.current.getZoom() === 12) {
-       leafletMap.current.panTo([locations[0].latitude, locations[0].longitude]);
+    if (visibleLocations.length > 0 && leafletMap.current.getZoom() === 12) {
+       leafletMap.current.panTo([visibleLocations[0].latitude, visibleLocations[0].longitude]);
     }
 
-  }, [locations, users, isAr]);
+  }, [visibleLocations, users, cases, isAr]);
+
+  const selectedLocation = visibleLocations.find(loc => loc.id === selectedId);
+  const selectedUser = selectedLocation && users.find(u => u.uid === selectedLocation.id || u.id === selectedLocation.id);
+  const selectedTask = selectedLocation && cases.find(c => (selectedLocation.activeTaskIds || []).includes(c.id) || c.volunteerId === selectedLocation.id || c.assignedVolunteerId === selectedLocation.id);
 
   return (
     <div style={{display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)'}}>
       <div className="card h-100" style={{flex: 1, display: 'flex', flexDirection: 'column'}}>
         <div className="card-header d-flex justify-content-between align-items-center">
           <div className="bold"><i className="bi bi-geo-alt-fill me-2 text-primary"></i>{isAr ? 'الخريطة المباشرة للمتطوعين النشطين' : 'Live Active Volunteers Map'}</div>
-          <span className="badge bg-primary rounded-pill">{locations.length} {isAr ? 'متطوع ميداني' : 'field volunteers'}</span>
+          <div className="d-flex align-items-center gap-2">
+            <span className="badge bg-success rounded-pill">{visibleLocations.length} {isAr ? 'متصل' : 'online'}</span>
+            <span className="badge bg-secondary rounded-pill">{locations.length - visibleLocations.length} {isAr ? 'متأخر' : 'stale'}</span>
+            <button className="btn btn-sm btn-outline-primary" onClick={()=>{
+              const points = visibleLocations.map(l=>[l.latitude,l.longitude]);
+              if(points.length) leafletMap.current.fitBounds(points, {padding:[40,40]});
+            }} title={isAr ? 'عرض الجميع' : 'Fit all'}><i className="bi bi-arrows-fullscreen"></i></button>
+          </div>
         </div>
-        <div className="card-body p-0" style={{flex: 1, position: 'relative'}}>
+        <div className="card-body p-0" style={{flex: 1, position: 'relative', display:'flex', minHeight:0}}>
           <div ref={mapRef} style={{width: '100%', height: '100%', minHeight: '400px', borderRadius: '0 0 var(--radius) var(--radius)'}}></div>
-          {locations.length === 0 && (
+          <div style={{position:'absolute', top:12, right:12, zIndex:900, width:290, maxHeight:'calc(100% - 24px)', overflowY:'auto', background:'var(--bg-glass)', border:'1px solid var(--border)', borderRadius:12, backdropFilter:'blur(12px)', padding:10}}>
+            <div className="bold mb-2">{isAr ? 'المتطوعون الآن' : 'Volunteers now'}</div>
+            {visibleLocations.length === 0 && <div className="text-muted text-sm p-2">{isAr ? 'لا توجد إشارات حديثة.' : 'No recent signals.'}</div>}
+            {visibleLocations.map(loc=>{
+              const volunteer = users.find(u=>u.uid===loc.id || u.id===loc.id);
+              const task = cases.find(c=>(loc.activeTaskIds||[]).includes(c.id) || c.volunteerId===loc.id || c.assignedVolunteerId===loc.id);
+              return <button key={loc.id} onClick={()=>{setSelectedId(loc.id); leafletMap.current?.setView([loc.latitude,loc.longitude],15); markersRef.current[loc.id]?.openPopup();}} style={{display:'block',width:'100%',textAlign:isAr?'right':'left',background:selectedId===loc.id?'rgba(25,118,210,.15)':'transparent',border:0,borderRadius:8,padding:'9px 8px',color:'inherit',marginBottom:4}}>
+                <div className="bold text-sm"><i className="bi bi-circle-fill text-success me-1" style={{fontSize:8}}></i>{volunteer?.name || (isAr?'متطوع':'Volunteer')}</div>
+                <div className="text-muted text-xs truncate">{task?.title || (isAr?'بدون مهمة محددة':'No task linked')}</div>
+                <div className="text-muted text-xs">{Math.round(Number(loc.accuracy||0))}m • {formatLocationAge(loc.timestamp)}</div>
+              </button>;
+            })}
+            {selectedLocation && <div className="mt-2 p-2" style={{borderTop:'1px solid var(--border)'}}><div className="text-xs text-muted">{isAr?'التفاصيل':'Details'}</div><div className="bold">{selectedUser?.name || 'Volunteer'}</div><div className="text-xs">{selectedTask?.title || (isAr?'لا توجد مهمة':'No task')}</div></div>}
+          </div>
+          {visibleLocations.length === 0 && (
             <div style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 1000}}>
               <div className="text-center" style={{background: 'var(--bg-glass)', padding: '20px', borderRadius: 'var(--radius)', backdropFilter: 'blur(10px)'}}>
                 <i className="bi bi-car-front" style={{fontSize: '3rem', color: 'var(--text-secondary)'}}></i>
                 <h4 className="mt-3">{isAr ? 'لا يوجد متطوعون نشطون حالياً' : 'No Active Volunteers Currently'}</h4>
-                <p className="text-muted">{isAr ? 'تظهر مواقع المتطوعين هنا عند قبولهم لمهام ميدانية.' : 'Volunteer locations will appear here during active field tasks.'}</p>
+                <p className="text-muted">{isAr ? 'تظهر المواقع الحديثة أثناء تنفيذ المهام الميدانية.' : 'Recent locations appear while field tasks are active.'}</p>
               </div>
             </div>
           )}

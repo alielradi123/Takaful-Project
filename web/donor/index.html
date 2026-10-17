@@ -435,6 +435,7 @@
         </div>
       </div>
     </div>
+    <a id="apk-download-link" href="#" target="_blank" rel="noreferrer" class="btn btn-primary" style="display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:20;border-radius:50px;white-space:nowrap;"><i class="bi bi-phone me-1"></i><span id="apk-download-label">تحميل تطبيق Android</span></a>
   </div>
 
   <script>
@@ -912,8 +913,22 @@
 
   <script type="module">
     import { loginDonor, registerDonor, registerWithVerification, checkDonorRole, loginWithGoogle, completeGoogleRegistration, completeGoogleRegistrationWithVerification } from './donor-auth.js';
-    import { auth } from '../firebase-config.js';
+    import { auth, db } from '../firebase-config.js';
+    import { doc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
     import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js';
+
+    onSnapshot(doc(db, 'settings', 'general'), (snapshot) => {
+      const data = snapshot.exists() ? snapshot.data() : {};
+      const url = data.apk_url || data.play_store_link || '';
+      const link = document.getElementById('apk-download-link');
+      const label = document.getElementById('apk-download-label');
+      if (link && url) {
+        link.href = url;
+        link.style.display = 'inline-flex';
+        if (data.apk_url) label.textContent = document.documentElement.lang === 'ar' ? 'تحميل تطبيق Android' : 'Download Android App';
+        else label.textContent = document.documentElement.lang === 'ar' ? 'فتح التطبيق على Google Play' : 'Open on Google Play';
+      }
+    });
 
     // Expose to global scope for inline handlers
     window._registerDonor = registerDonor;

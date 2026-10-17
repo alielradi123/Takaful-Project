@@ -40,6 +40,7 @@ import { uploadMultipleToSupabase } from '../supabase-config.js';
 import {
   collection, query, where, orderBy, onSnapshot,
   doc, updateDoc, addDoc, serverTimestamp, getDocs, deleteDoc
+  , setDoc
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
 
@@ -78,6 +79,7 @@ function App() {
   const [page, setPage] = useState('tasks');
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState({name:'...',email:''});
+  const [systemSettings, setSystemSettings] = useState({});
   const [tasks, setTasks] = useState([]);
   const [myTasks, setMyTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -125,6 +127,7 @@ function App() {
   // Real-time listener for tasks (Cases assigned to volunteers or available)
   useEffect(()=>{
     if(loading||!user) return;
+    const settingsUnsub = onSnapshot(doc(db,'settings','general'), s => setSystemSettings(s.exists() ? s.data() : {}));
     const qAll = query(collection(db,'cases'), where('status','in',['approved','assigned','completed']));
     const unsub = onSnapshot(qAll, s => {
       const docs = s.docs.map(d=>({id:d.id,...d.data()}));
@@ -170,10 +173,40 @@ function App() {
       setChats(docs);
       // Auto-select the first (latest) chat if none selected
       setActiveChatId(prev => prev || docs[0]?.id || null);
+    }, err => {
+      console.error('Support chat listener error:', err);
+      showToast('error', 'تعذر تحميل محادثة الدعم: ' + err.message);
     });
 
-    return () => { unsub(); unsubChats(); };
+    return () => { settingsUnsub(); unsub(); unsubChats(); };
   },[loading, user]);
+
+  // Share browser location while the volunteer has active field tasks.
+  useEffect(()=>{
+    if(loading || !user || !navigator.geolocation) return;
+    const activeTaskIds = myTasks.filter(t=>t.status==='assigned').map(t=>t.id);
+    if(!activeTaskIds.length) return;
+
+    const writeLocation = position => setDoc(doc(db,'volunteerLocations',user.uid), {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy || 0,
+      speed: position.coords.speed || 0,
+      activeTaskIds,
+      isOnline: true,
+      timestamp: Date.now(),
+      updatedAt: serverTimestamp()
+    }, {merge:true}).catch(err=>console.warn('Location update failed:', err));
+    const watchId = navigator.geolocation.watchPosition(writeLocation, err=>console.warn('Location permission:', err.message), {
+      enableHighAccuracy: true,
+      maximumAge: 10000,
+      timeout: 15000
+    });
+    return ()=>{
+      navigator.geolocation.clearWatch(watchId);
+      setDoc(doc(db,'volunteerLocations',user.uid), {isOnline:false, offlineAt:serverTimestamp()}, {merge:true}).catch(()=>{});
+    };
+  },[loading, user, myTasks]);
 
 
 
@@ -182,7 +215,11 @@ function App() {
     const u = onSnapshot(
       query(collection(db,'chats',activeChatId,'messages'),orderBy('createdAt','asc')),
       s=>setMsgs(s.docs.map(d=>({id:d.id,...d.data()}))),
-      err => { console.error('Messages listener error:', err); setMsgs([]); }
+      err => {
+        console.error('Messages listener error:', err);
+        setMsgs([]);
+        showToast('error', 'تعذر تحميل رسائل الدعم: ' + err.message);
+      }
     );
     return ()=>u();
   },[activeChatId]);
@@ -270,6 +307,7 @@ function App() {
           <div className="sidebar-brand">
             <h2>{isAr ? 'تـكـافـل' : 'Takaful'}</h2>
             <p style={{color:'var(--brand-500)'}}>{isAr ? 'بوابة المتطوعين' : 'Volunteer Portal'}</p>
+            {systemSettings.apk_url || systemSettings.play_store_link ? <a href={systemSettings.apk_url || systemSettings.play_store_link} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{marginTop:8,width:'100%'}}><i className="bi bi-phone me-1"></i>{isAr ? 'تحميل تطبيق Android' : 'Download Android App'}</a> : null}
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -297,6 +335,7 @@ function App() {
             <button onClick={logoutDonor} className="btn btn-outline" style={{width:'100%',padding:'9px 14px',borderRadius:'var(--radius-sm)',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
               <i className="bi bi-box-arrow-right"></i> {isAr ? 'تسجيل الخروج' : 'Sign Out'}
             </button>
+            <SocialLinks settings={systemSettings} isAr={isAr} />
           </div>
         </div>
       </aside>
@@ -350,6 +389,12 @@ function App() {
       </div>
     </div>
   );
+}
+
+function SocialLinks({settings, isAr}) {
+  const links = [['facebook_url','bi-facebook',isAr?'فيسبوك':'Facebook'],['twitter_url','bi-twitter-x',isAr?'إكس':'X'],['instagram_url','bi-instagram',isAr?'إنستغرام':'Instagram'],['contact_phone','bi-whatsapp',isAr?'واتساب':'WhatsApp']].filter(([key])=>settings[key]);
+  if (!links.length) return null;
+  return <div style={{display:'flex',gap:10,flexWrap:'wrap',paddingTop:8,borderTop:'1px solid var(--border)',width:'100%'}}>{links.map(([key,icon,label])=>{const href=key==='contact_phone'?`https://wa.me/${String(settings[key]).replace(/[^0-9]/g,'')}`:settings[key];return <a key={key} href={href} target="_blank" rel="noreferrer" title={label} style={{color:'var(--text-secondary)',fontSize:18}}><i className={`bi ${icon}`}></i></a>})}</div>;
 }
 
 // ═══════════════════════════════════════
