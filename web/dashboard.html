@@ -101,6 +101,7 @@ const numericDonationAmount = donation => {
 const STATUS = {
   pending:  {l:'معلق',   c:'badge badge-pending',dot:'#f9a825',i:'bi-clock-fill'},
   approved: {l:'معتمد',  c:'badge badge-approved',dot:'#66BB6A',i:'bi-check-circle-fill'},
+  assigned: {l:'مسندة لمتطوع',c:'badge badge-approved',dot:'#42a5f5',i:'bi-person-check-fill'},
   rejected: {l:'مرفوض', c:'badge badge-rejected',dot:'#ef5350',i:'bi-x-circle-fill'},
   completed:{l:'مكتمل', c:'badge badge-completed',dot:'#42a5f5',i:'bi-star-fill'},
 };
@@ -129,6 +130,76 @@ function Modal({title, icon, onClose, children, footer}) {
 const Field = ({label, children}) => (
   <div className="form-group"><label className="form-label">{label}</label>{children}</div>
 );
+
+function AssignVolunteerModal({caseItem, users, onClose, isAr}) {
+  const [selectedVolunteerId, setSelectedVolunteerId] = useState(caseItem.assignedVolunteerId || caseItem.volunteerId || '');
+  const [saving, setSaving] = useState(false);
+  const assignedVolunteerId = caseItem.assignedVolunteerId || caseItem.volunteerId || '';
+  const volunteers = (users || [])
+    .filter(u => [u.role, u.accountType].some(role => String(role || '').trim().toLowerCase() === 'volunteer')
+      && u.status === 'active'
+      && (u.uid || u.id))
+    .sort((a,b) => String(a.name || a.fullName || a.email || '').localeCompare(String(b.name || b.fullName || b.email || ''), isAr ? 'ar' : 'en'));
+  const isUnassigning = Boolean(assignedVolunteerId) && !selectedVolunteerId;
+
+  const save = async () => {
+    if (!selectedVolunteerId && !isUnassigning) return;
+    setSaving(true);
+    try {
+      const previousStatus = caseItem.status === 'assigned'
+        ? (caseItem.statusBeforeAssignment || 'approved')
+        : caseItem.status;
+      await updateDoc(doc(db, 'cases', caseItem.id), {
+        assignedVolunteerId: selectedVolunteerId,
+        volunteerId: selectedVolunteerId,
+        status: selectedVolunteerId ? 'assigned' : previousStatus,
+        statusBeforeAssignment: selectedVolunteerId ? previousStatus : deleteField(),
+        assignedAt: selectedVolunteerId ? serverTimestamp() : deleteField(),
+        updatedAt: serverTimestamp()
+      });
+      showToast('success', isAr ? 'تم تحديث التعيين' : 'Assignment updated',
+        selectedVolunteerId
+          ? (isAr ? 'تم تعيين المتطوع للحالة بنجاح' : 'Volunteer assigned successfully')
+          : (isAr ? 'تم إلغاء تعيين المتطوع' : 'Volunteer assignment removed'));
+      onClose();
+    } catch (e) {
+      console.error('Volunteer assignment failed:', e);
+      showToast('error', isAr ? 'تعذر تعيين المتطوع' : 'Could not assign volunteer', e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={isAr ? 'تعيين متطوع للحالة' : 'Assign Volunteer'}
+      icon="bi-person-check"
+      onClose={onClose}
+      footer={<>
+        <button type="button" className="btn btn-outline" onClick={onClose} disabled={saving}>{isAr ? 'إلغاء' : 'Cancel'}</button>
+        {assignedVolunteerId && <button type="button" className="btn btn-reject" onClick={()=>setSelectedVolunteerId('')} disabled={saving || isUnassigning}>{isAr ? 'إلغاء التعيين' : 'Unassign'}</button>}
+        <button type="button" className="btn btn-primary" onClick={save} disabled={saving || !volunteers.length || (!selectedVolunteerId && !isUnassigning)}>
+          {saving ? (isAr ? 'جارٍ الحفظ...' : 'Saving...') : (isAr ? 'حفظ التعيين' : 'Save Assignment')}
+        </button>
+      </>}
+    >
+      <div className="mb-3">
+        <div className="modal-label">{isAr ? 'الحالة' : 'Case'}</div>
+        <div className="bold">{caseItem.title || '—'}</div>
+      </div>
+      <Field label={isAr ? 'المتطوع النشط' : 'Active Volunteer'}>
+        <select className="form-input" value={selectedVolunteerId} onChange={e=>setSelectedVolunteerId(e.target.value)} disabled={saving || volunteers.length === 0}>
+          <option value="">{isAr ? 'اختر متطوعاً' : 'Select a volunteer'}</option>
+          {volunteers.map(volunteer => {
+            const id = volunteer.uid || volunteer.id;
+            return <option key={id} value={id}>{volunteer.name || volunteer.fullName || volunteer.email || id}</option>;
+          })}
+        </select>
+      </Field>
+      {!volunteers.length && <p className="text-muted mb-0">{isAr ? 'لا يوجد متطوعون نشطون يمكن تعيينهم حالياً.' : 'There are no active volunteers available to assign.'}</p>}
+    </Modal>
+  );
+}
 
 // ─── EMPTY STATE ───
 const Empty = ({icon,title,sub}) => (
@@ -1041,7 +1112,7 @@ function CaseModal({init, onClose, isAr}) {
         <div className="col-md-4"><Field label={isAr ? "الفئة" : "Category"}><select className="form-input" value={f.category} onChange={up('category')}><option value="مالي">{isAr ? 'مالي' : 'Financial'}</option><option value="عيني">{isAr ? 'عيني' : 'In-kind'}</option><option value="طبي">{isAr ? 'طبي' : 'Medical'}</option><option value="صحة">{isAr ? 'صحة' : 'Healthcare'}</option></select></Field></div>
         <div className="col-md-4"><Field label={isAr ? "درجة الإلحاح" : "Urgency Level"}><select className="form-input" value={f.urgencyLevel} onChange={up('urgencyLevel')}><option value="عادي">{isAr ? 'عادي' : 'Normal'}</option><option value="متوسط">{isAr ? 'متوسط' : 'Medium'}</option><option value="عاجل">{isAr ? 'عاجل' : 'Urgent'}</option></select></Field></div>
         <div className="col-md-4"><Field label={isAr ? "المبلغ المطلوب" : "Target Amount"}><input className="form-input" type="number" value={f.amountRequired} onChange={up('amountRequired')} placeholder="0" /></Field></div>
-        {isEdit&&<div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option value="pending">{isAr ? 'معلق' : 'Pending'}</option><option value="approved">{isAr ? 'معتمد' : 'Approved'}</option><option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option><option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option></select></Field></div>}
+        {isEdit&&<div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option value="pending">{isAr ? 'معلق' : 'Pending'}</option><option value="approved">{isAr ? 'معتمد' : 'Approved'}</option><option value="assigned">{isAr ? 'مسندة لمتطوع' : 'Assigned'}</option><option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option><option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option></select></Field></div>}
 
         <div className="col-12">
           <Field label={isAr ? "صور الحالة (يمكن اختيار عدة صور)" : "Case Images (Multiple files allowed)"}>
@@ -1182,6 +1253,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
   const STATUS_LABELS = {
     pending: isAr ? 'معلق' : 'Pending',
     approved: isAr ? 'معتمد' : 'Approved',
+    assigned: isAr ? 'مسندة لمتطوع' : 'Assigned',
     rejected: isAr ? 'مرفوض' : 'Rejected',
     completed: isAr ? 'مكتمل' : 'Completed'
   };
@@ -1210,10 +1282,10 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
             <div className="col-12">
               <div className="modal-label">{isAr ? 'المتطوع المعين' : 'Assigned Volunteer'}</div>
               <div className="form-input" style={{background:'rgba(255,255,255,0.03)'}}>
-                {getAssignedVol(detail.assignedVolunteerId) ? (
+                {getAssignedVol(detail.assignedVolunteerId || detail.volunteerId) ? (
                   <span>
                     <i className="bi bi-person-check-fill me-1" style={{color:'var(--primary-light)'}}></i>
-                    {getAssignedVol(detail.assignedVolunteerId).name} ({getAssignedVol(detail.assignedVolunteerId).email})
+                    {getAssignedVol(detail.assignedVolunteerId || detail.volunteerId).name} ({getAssignedVol(detail.assignedVolunteerId || detail.volunteerId).email})
                   </span>
                 ) : (isAr ? 'لم يتم تعيين متطوع بعد' : 'No volunteer assigned yet')}
               </div>
@@ -1277,6 +1349,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
             <option value="all">{isAr ? 'كل الحالات' : 'All Statuses'}</option>
             <option value="pending">{isAr ? 'معلق' : 'Pending'}</option>
             <option value="approved">{isAr ? 'معتمد' : 'Approved'}</option>
+            <option value="assigned">{isAr ? 'مسندة لمتطوع' : 'Assigned'}</option>
             <option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option>
             <option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option>
           </select>
@@ -1300,7 +1373,7 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
         :<div className="cases-grid">
           {filt.map(c=>{
             const sc=STATUS[c.status]||STATUS.pending;
-            const assignedVol = getAssignedVol(c.assignedVolunteerId);
+            const assignedVol = getAssignedVol(c.assignedVolunteerId || c.volunteerId);
             return(
               <div className={`case-card ${c.status}`} key={c.id}>
                 <div className="case-card-header">
