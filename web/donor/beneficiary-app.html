@@ -8,6 +8,27 @@
   <link rel="icon" type="image/webp" href="../app-icon.webp">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <link rel="stylesheet" href="donor-style.css">
+  <style>
+    .beneficiary-bottom-nav{display:none}
+    .case-details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .case-detail-item{padding:12px;border-radius:var(--radius-md);background:var(--bg-glass);border:1px solid var(--border)}
+    .notification-menu{position:absolute;top:calc(100% + 10px);inset-inline-end:0;width:min(360px,calc(100vw - 24px));max-height:420px;overflow:auto;z-index:120;background:var(--bg-sidebar);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);padding:10px}
+    .notification-row{padding:12px;border-radius:var(--radius-sm);border-bottom:1px solid var(--border);cursor:pointer}
+    .notification-row:last-child{border-bottom:0}
+    .notification-row.unread{background:rgba(232,80,10,.08)}
+    .chat-messages{display:flex;flex-direction:column;gap:10px;max-height:min(58vh,560px);overflow-y:auto;padding:8px 4px}
+    .chat-message{max-width:min(82%,560px);padding:11px 14px;border-radius:16px;background:var(--bg-glass);border:1px solid var(--border);align-self:flex-start;overflow-wrap:anywhere}
+    html[dir="rtl"] .chat-message.mine{align-self:flex-end;background:rgba(232,80,10,.14)}
+    html[dir="ltr"] .chat-message.mine{align-self:flex-end;background:rgba(232,80,10,.14)}
+    @media(max-width:768px){
+      .beneficiary-bottom-nav{position:fixed;inset-inline:0;bottom:0;z-index:80;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 5px calc(8px + env(safe-area-inset-bottom));background:var(--bg-sidebar);border-top:1px solid var(--border);box-shadow:0 -8px 24px rgba(0,0,0,.16);backdrop-filter:blur(18px)}
+      .beneficiary-bottom-nav button{min-width:0;border:0;background:transparent;color:var(--text-muted);font:inherit;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:5px 2px;font-size:10px;cursor:pointer}
+      .beneficiary-bottom-nav button i{font-size:19px}
+      .beneficiary-bottom-nav button.active{color:var(--brand-500);font-weight:800}
+      .case-details-grid{grid-template-columns:1fr}
+      .page-content{padding-bottom:calc(90px + env(safe-area-inset-bottom))}
+    }
+  </style>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script type="importmap">
@@ -39,19 +60,30 @@ import { auth, db } from 'firebase-config';
 import { uploadMultipleToSupabase } from '../supabase-config.js';
 import {
   collection, query, where, orderBy, onSnapshot,
-  doc, setDoc, updateDoc, serverTimestamp
+  doc, setDoc, updateDoc, writeBatch, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
 // ─── HELPERS ───
 const ini = (n='') => (n||'م').trim().split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'م';
 const fmtNum = n => Number(n||0).toLocaleString('ar');
-const fmtDate = ts => {
+const fmtDate = (ts,isAr=true) => {
   if(!ts) return '—';
   const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
-  return new Intl.DateTimeFormat('ar',{year:'numeric',month:'short',day:'numeric'}).format(d);
+  return new Intl.DateTimeFormat(isAr?'ar':'en',{year:'numeric',month:'short',day:'numeric'}).format(d);
+};
+const timestampMillis = ts => {
+  if(!ts) return 0;
+  if(typeof ts.toMillis==='function') return ts.toMillis();
+  if(typeof ts.toDate==='function') return ts.toDate().getTime();
+  const value=typeof ts==='number'&&ts<1e12?ts*1000:new Date(ts).getTime();
+  return Number.isFinite(value)?value:0;
+};
+const formatDateTime = (ts,isAr) => {
+  const value=timestampMillis(ts);
+  return value?new Intl.DateTimeFormat(isAr?'ar':'en',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)):'';
 };
 
 function showToast(type, msg) {
@@ -76,8 +108,17 @@ function App() {
   const [profile, setProfile] = useState({name:'...',email:''});
   const [systemSettings, setSystemSettings] = useState({});
   const [myCases, setMyCases] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [chat, setChat] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [messageText, setMessageText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const chatCreationAttempted = useRef('');
 
   const [lang, setLang] = useState(() => localStorage.getItem('takaful-lang') || 'ar');
   const isAr = lang === 'ar';
@@ -128,9 +169,96 @@ function App() {
         return tB - tA;
       });
       setMyCases(docs);
+      setSelectedCase(current=>current?docs.find(c=>c.id===current.id)||current:null);
     });
-    return ()=>{ settingsUnsub(); unsub(); };
+    const notificationsQuery = query(collection(db,'notifications'), where('userId','==',user.uid));
+    const notificationsUnsub = onSnapshot(notificationsQuery, s => {
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      docs.sort((a,b)=>timestampMillis(b.timestamp)-timestampMillis(a.timestamp));
+      setNotifications(docs);
+    }, err => console.error('Unable to listen for beneficiary notifications:',err));
+    return ()=>{ settingsUnsub(); unsub(); notificationsUnsub(); };
   },[loading, user]);
+
+  useEffect(()=>{
+    if(loading || !user || page!=='support') return;
+    setChatLoading(true);
+    const chatsQuery = query(collection(db,'chats'),where('userId','==',user.uid));
+    const unsubscribe = onSnapshot(chatsQuery, snapshot => {
+      if(snapshot.empty) {
+        if(chatCreationAttempted.current===user.uid) return;
+        chatCreationAttempted.current=user.uid;
+        const chatRef=doc(collection(db,'chats'));
+        setDoc(chatRef,{
+          userId:user.uid,
+          userName:profile.name||user.displayName||user.email||'مستفيد',
+          createdAt:serverTimestamp(),
+          lastMessage:'',
+          lastMessageTime:serverTimestamp()
+        }).catch(error=>{
+          console.error('Unable to create support chat:',error);
+          chatCreationAttempted.current='';
+          setChatLoading(false);
+          showToast('error',isAr?'تعذر بدء محادثة الدعم. يرجى المحاولة لاحقاً.':'Could not start support chat. Please try again.');
+        });
+        return;
+      }
+      const docs=snapshot.docs.slice().sort((a,b)=>timestampMillis(b.data().lastMessageTime)-timestampMillis(a.data().lastMessageTime));
+      const latest=docs[0];
+      setChat({id:latest.id,...latest.data()});
+      setChatLoading(false);
+    },error=>{
+      console.error('Unable to listen for beneficiary support chat:',error);
+      setChatLoading(false);
+      showToast('error',isAr?'تعذر تحميل محادثة الدعم.':'Unable to load support chat.');
+    });
+    return ()=>unsubscribe();
+  },[loading,user,page,profile.name,isAr]);
+
+  useEffect(()=>{
+    if(!chat?.id || page!=='support') { setChatMessages([]); return; }
+    const messagesQuery=query(collection(db,'chats',chat.id,'messages'),orderBy('createdAt','asc'));
+    return onSnapshot(messagesQuery,snapshot=>{
+      setChatMessages(snapshot.docs.map(d=>({id:d.id,...d.data()})));
+      setChatLoading(false);
+    },error=>{
+      console.error('Unable to listen for support messages:',error);
+      setChatLoading(false);
+      showToast('error',isAr?'تعذر تحميل الرسائل.':'Unable to load messages.');
+    });
+  },[chat?.id,page,isAr]);
+
+  const openPage = id => { setPage(id); setSidebarOpen(false); setShowNotifications(false); };
+  const markNotificationRead = async notification => {
+    if(notification.isRead) return;
+    try { await updateDoc(doc(db,'notifications',notification.id),{isRead:true}); }
+    catch(error) { showToast('error',isAr?'تعذر تحديث الإشعار.':'Could not update notification.'); }
+  };
+  const sendSupportMessage = async event => {
+    event.preventDefault();
+    const text=messageText.trim();
+    if(!text || !chat?.id || sendingMessage) return;
+    setSendingMessage(true);
+    try {
+      const messageRef=doc(collection(db,'chats',chat.id,'messages'));
+      const batch=writeBatch(db);
+      batch.set(messageRef,{
+        sender:'user',
+        senderId:user.uid,
+        senderName:profile.name||user.displayName||'مستفيد',
+        senderPhotoUrl:profile.photoURL||'',
+        text,
+        createdAt:serverTimestamp(),
+        timestamp:Date.now(),
+        isRead:false
+      });
+      batch.update(doc(db,'chats',chat.id),{lastMessage:text,lastMessageTime:serverTimestamp()});
+      await batch.commit();
+      setMessageText('');
+    } catch(error) {
+      showToast('error',(isAr?'تعذر إرسال الرسالة: ':'Could not send message: ')+error.message);
+    } finally { setSendingMessage(false); }
+  };
 
   if(loading) return (
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -142,13 +270,16 @@ function App() {
     {id:'home',l:'الرئيسية',icon:'bi-house-fill'},
     {id:'cases',l:'طلباتي',icon:'bi-card-list'},
     {id:'submit',l:'تقديم طلب',icon:'bi-plus-circle-fill'},
+    {id:'support',l:'الدعم',icon:'bi-chat-dots-fill'},
     {id:'profile',l:'حسابي',icon:'bi-person-fill'},
   ] : [
     {id:'home',l:'Home',icon:'bi-house-fill'},
     {id:'cases',l:'My Requests',icon:'bi-card-list'},
     {id:'submit',l:'Submit Request',icon:'bi-plus-circle-fill'},
+    {id:'support',l:'Support',icon:'bi-chat-dots-fill'},
     {id:'profile',l:'My Account',icon:'bi-person-fill'},
   ];
+  const unreadNotifications=notifications.filter(n=>!n.isRead).length;
 
   return (
     <div className="app-layout">
@@ -166,7 +297,7 @@ function App() {
         </div>
         <nav className="sidebar-nav">
           {NAV.map(n=>(
-            <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>setPage(n.id)} role="button">
+            <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>openPage(n.id)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPage(n.id);}}}>
               <i className={`bi ${n.icon} nav-icon`}></i>
               <span style={{flex:1}}>{n.l}</span>
             </div>
@@ -204,6 +335,23 @@ function App() {
             <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || (isAr ? 'تكافل' : 'Takaful')}</div>
           </div>
           <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{position:'relative'}}>
+              <button type="button" className="btn btn-icon" aria-label={isAr?'الإشعارات':'Notifications'} aria-expanded={showNotifications} onClick={()=>setShowNotifications(v=>!v)} style={{position:'relative'}}>
+                <i className="bi bi-bell-fill"></i>
+                {unreadNotifications>0&&<span style={{position:'absolute',top:-4,insetInlineEnd:-4,minWidth:17,height:17,borderRadius:20,background:'var(--red)',color:'#fff',fontSize:10,fontWeight:800,display:'grid',placeItems:'center',padding:'0 3px'}}>{unreadNotifications>9?'9+':unreadNotifications}</span>}
+              </button>
+              {showNotifications&&<div className="notification-menu">
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'6px 8px 10px'}}>
+                  <strong>{isAr?'الإشعارات':'Notifications'}</strong>
+                  {unreadNotifications>0&&<button type="button" className="btn btn-outline btn-sm" onClick={async()=>{await Promise.all(notifications.filter(n=>!n.isRead).map(markNotificationRead));}}>{isAr?'تحديد الكل كمقروء':'Mark all read'}</button>}
+                </div>
+                {notifications.length===0?<div className="text-muted" style={{padding:14,textAlign:'center'}}>{isAr?'لا توجد إشعارات حتى الآن':'No notifications yet'}</div>:notifications.slice(0,8).map(n=><div key={n.id} className={`notification-row ${n.isRead?'':'unread'}`} onClick={()=>markNotificationRead(n)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter')markNotificationRead(n);}}>
+                  <div style={{fontWeight:800,fontSize:13}}>{n.title||(isAr?'تحديث جديد':'New update')}</div>
+                  <div style={{fontSize:12,color:'var(--text-secondary)',marginTop:4}}>{n.message||''}</div>
+                  <div className="text-xs text-muted" style={{marginTop:6}}>{formatDateTime(n.timestamp,isAr)}</div>
+                </div>)}
+              </div>}
+            </div>
             {/* Language Toggle */}
             <button onClick={toggleLang} className={`language-toggle ${isAr ? 'is-ar' : 'is-en'}`} title={isAr ? 'Switch to English' : 'التبديل للعربية'}>
               <span className={`language-toggle-icon ${isAr ? 'flag-uk' : 'flag-sudan'}`} aria-hidden="true">{isAr ? '🇬🇧' : '🇸🇩'}</span>
@@ -236,14 +384,19 @@ function App() {
             </div>
           ) : (
             <>
-              {page==='home' && <HomePage cases={myCases} profile={profile} onGoSubmit={()=>setPage('submit')} onGoCases={()=>setPage('cases')} isAr={isAr} />}
-              {page==='cases' && <MyCasesPage cases={myCases} isAr={isAr} />}
-              {page==='submit' && <SubmitCasePage user={user} onSuccess={()=>setPage('cases')} isAr={isAr} />}
+              {page==='home' && <HomePage cases={myCases} profile={profile} onGoSubmit={()=>openPage('submit')} onGoCases={()=>openPage('cases')} onSelectCase={setSelectedCase} isAr={isAr} />}
+              {page==='cases' && <MyCasesPage cases={myCases} onSelectCase={setSelectedCase} isAr={isAr} />}
+              {page==='submit' && <SubmitCasePage user={user} onSuccess={()=>openPage('cases')} isAr={isAr} />}
+              {page==='support' && <SupportPage chat={chat} messages={chatMessages} loading={chatLoading} text={messageText} setText={setMessageText} sending={sendingMessage} onSend={sendSupportMessage} profile={profile} user={user} isAr={isAr} />}
               {page==='profile' && <ProfilePage profile={profile} cases={myCases} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
             </>
           )}
         </main>
       </div>
+      <nav className="beneficiary-bottom-nav" aria-label={isAr?'التنقل الرئيسي':'Main navigation'}>
+        {NAV.map(n=><button key={n.id} type="button" className={page===n.id?'active':''} aria-current={page===n.id?'page':undefined} onClick={()=>openPage(n.id)}><i className={`bi ${n.icon}`}></i><span>{n.l}</span></button>)}
+      </nav>
+      {selectedCase&&<CaseDetailsModal c={selectedCase} isAr={isAr} onClose={()=>setSelectedCase(null)} />}
     </div>
   );
 }
@@ -257,7 +410,7 @@ function SocialLinks({settings, isAr}) {
 // ═══════════════════════════════════════
 // HOME PAGE
 // ═══════════════════════════════════════
-function HomePage({cases, profile, onGoSubmit, onGoCases, isAr}) {
+function HomePage({cases, profile, onGoSubmit, onGoCases, onSelectCase, isAr}) {
   const pending = cases.filter(c=>c.status==='pending').length;
   const active = cases.filter(c=>c.status==='active'||c.status==='approved').length;
   const completed = cases.filter(c=>c.status==='completed').length;
@@ -307,7 +460,7 @@ function HomePage({cases, profile, onGoSubmit, onGoCases, isAr}) {
         <div className="card"><div className="empty-state"><i className="bi bi-folder"></i><h3>{isAr?'لا توجد طلبات سابقة':'No Previous Requests'}</h3><p>{isAr?'يمكنك رفع طلب مساعدة جديد ليتم مراجعته':'You can submit a new aid request for review'}</p></div></div>
       ) : (
         <div className="cases-grid">
-          {cases.slice(0,2).map(c=><CaseCard key={c.id} c={c} isAr={isAr} />)}
+          {cases.slice(0,2).map(c=><CaseCard key={c.id} c={c} onSelect={()=>onSelectCase(c)} isAr={isAr} />)}
         </div>
       )}
     </div>
@@ -317,7 +470,7 @@ function HomePage({cases, profile, onGoSubmit, onGoCases, isAr}) {
 // ═══════════════════════════════════════
 // CASE CARD
 // ═══════════════════════════════════════
-function CaseCard({c, isAr}) {
+function CaseCard({c, onSelect, isAr}) {
   const target = c.targetAmount||c.amountRequired||0;
   const raised = c.raisedAmount||c.amountRaised||0;
   const pct = target > 0 ? Math.min(Math.round(raised/target*100),100) : 0;
@@ -348,6 +501,7 @@ function CaseCard({c, isAr}) {
       <div className="case-card-body">
         <div className="case-card-title">{c.title||(isAr?'بدون عنوان':'Untitled')}</div>
         <div className="case-card-desc" style={{marginBottom:12}}>{getStatus(c.status)}</div>
+        {onSelect&&<button type="button" className="btn btn-outline btn-sm" onClick={()=>onSelect(c)}>{isAr?'تفاصيل الطلب':'Case details'} <i className="bi bi-arrow-up-left"></i></button>}
         
         {c.category==='مالي' && target > 0 && (
           <div className="case-card-progress">
@@ -367,21 +521,130 @@ function CaseCard({c, isAr}) {
 // ═══════════════════════════════════════
 // MY CASES PAGE
 // ═══════════════════════════════════════
-function MyCasesPage({cases, isAr}) {
+function MyCasesPage({cases, onSelectCase, isAr}) {
+  const [search,setSearch]=useState('');
+  const [status,setStatus]=useState('all');
+  const [category,setCategory]=useState('all');
+  const normalizedSearch=search.trim().toLocaleLowerCase(isAr?'ar':'en');
+  const filteredCases=cases.filter(c=>{
+    const text=[c.title,c.description,c.story,c.location,c.category].filter(Boolean).join(' ').toLocaleLowerCase(isAr?'ar':'en');
+    return (!normalizedSearch||text.includes(normalizedSearch))
+      &&(status==='all'||c.status===status)
+      &&(category==='all'||c.category===category);
+  });
   return (
     <div>
       <div className="section-header" style={{marginBottom:20}}>
         <div className="section-title"><div className="section-bar"></div>{isAr?'سجل طلباتي':'My Requests History'}</div>
       </div>
+      <div className="card" style={{padding:16,marginBottom:18}}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}>
+          <label style={{position:'relative'}}>
+            <i className="bi bi-search" style={{position:'absolute',insetInlineStart:12,top:'50%',transform:'translateY(-50%)',color:'var(--text-muted)'}}></i>
+            <input className="form-input" type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder={isAr?'ابحث بالعنوان أو الوصف أو الموقع':'Search title, description or location'} aria-label={isAr?'بحث في طلباتي':'Search my requests'} style={{paddingInlineStart:38}} />
+          </label>
+          <select className="form-input" value={status} onChange={e=>setStatus(e.target.value)} aria-label={isAr?'تصفية حسب الحالة':'Filter by status'}>
+            <option value="all">{isAr?'كل الحالات':'All statuses'}</option>
+            <option value="pending">{isAr?'قيد المراجعة':'Under review'}</option>
+            <option value="approved">{isAr?'معتمد':'Approved'}</option>
+            <option value="active">{isAr?'نشط':'Active'}</option>
+            <option value="rejected">{isAr?'مرفوض':'Rejected'}</option>
+            <option value="completed">{isAr?'مكتمل':'Completed'}</option>
+          </select>
+          <select className="form-input" value={category} onChange={e=>setCategory(e.target.value)} aria-label={isAr?'تصفية حسب التصنيف':'Filter by category'}>
+            <option value="all">{isAr?'كل التصنيفات':'All categories'}</option>
+            <option value="مالي">{isAr?'مالي':'Financial'}</option>
+            <option value="طبي">{isAr?'طبي':'Medical'}</option>
+            <option value="عيني">{isAr?'عيني':'In-kind'}</option>
+          </select>
+        </div>
+        <div className="text-xs text-muted" style={{marginTop:10}}>{isAr?`عرض ${fmtNum(filteredCases.length)} من ${fmtNum(cases.length)} طلب`:`Showing ${filteredCases.length} of ${cases.length} requests`}</div>
+      </div>
       {cases.length === 0 ? (
         <div className="card"><div className="empty-state"><i className="bi bi-folder-x"></i><h3>{isAr?'لا توجد طلبات سابقة':'No Previous Requests'}</h3></div></div>
+      ) : filteredCases.length===0 ? (
+        <div className="card"><div className="empty-state"><i className="bi bi-search"></i><h3>{isAr?'لا توجد طلبات مطابقة':'No matching requests'}</h3><p>{isAr?'جرّب تغيير كلمات البحث أو عوامل التصفية':'Try changing your search or filters'}</p></div></div>
       ) : (
         <div className="cases-grid">
-          {cases.map(c=><CaseCard key={c.id} c={c} isAr={isAr} />)}
+          {filteredCases.map(c=><CaseCard key={c.id} c={c} onSelect={()=>onSelectCase(c)} isAr={isAr} />)}
         </div>
       )}
     </div>
   );
+}
+
+function CaseDetailsModal({c,isAr,onClose}) {
+  const statusLabels=isAr
+    ? {pending:'قيد المراجعة',approved:'معتمد',active:'نشط ويتم الجمع',rejected:'مرفوض',completed:'مكتمل'}
+    : {pending:'Under review',approved:'Approved',active:'Active & collecting',rejected:'Rejected',completed:'Completed'};
+  const categoryLabels=isAr?{مالي:'مالي',طبي:'طبي',عيني:'عيني'}:{مالي:'Financial',طبي:'Medical',عيني:'In-kind'};
+  const urgencyLabels=isAr?{عادي:'عادي',متوسط:'متوسط',عاجل:'عاجل'}:{عادي:'Normal',متوسط:'Medium',عاجل:'Urgent'};
+  const target=Number(c.targetAmount||c.amountRequired||0);
+  const raised=Number(c.raisedAmount||c.amountRaised||0);
+  const statusDescription=c.status==='rejected'?(c.rejectionReason||c.adminNote||c.statusReason)
+    :c.status==='completed'?(isAr?'تم إكمال الطلب.':'This request has been completed.')
+    :c.status==='active'||c.status==='approved'?(isAr?'تم اعتماد طلبك وهو متاح للدعم.':'Your request has been approved and is open for support.')
+    :(isAr?'طلبك قيد المراجعة وسيتم إشعارك عند تحديث حالته.':'Your request is under review. You will be notified when its status changes.');
+  return <div className="modal-overlay" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="case-details-title">
+      <div className="modal-header">
+        <div className="modal-title" id="case-details-title"><i className="bi bi-file-earmark-text-fill" style={{color:'var(--brand-500)'}}></i>{isAr?'تفاصيل الطلب':'Request details'}</div>
+        <button type="button" className="modal-close" onClick={onClose} aria-label={isAr?'إغلاق':'Close'}><i className="bi bi-x-lg"></i></button>
+      </div>
+      <div className="modal-body">
+        {(c.imageUrls?.[0]||c.imageUrl||c.documentUrl)&&<img src={c.imageUrls?.[0]||c.imageUrl||c.documentUrl} alt={isAr?'مرفق الطلب':'Request attachment'} style={{width:'100%',maxHeight:230,objectFit:'cover',borderRadius:'var(--radius-md)',marginBottom:16}} />}
+        <h3 style={{fontSize:20,marginBottom:8}}>{c.title||(isAr?'طلب مساعدة':'Aid request')}</h3>
+        <div style={{marginBottom:14}}><span className="badge badge-cat">{categoryLabels[c.category]||c.category|| (isAr?'عام':'General')}</span> <span className="badge badge-medium">{statusLabels[c.status]||c.status||'—'}</span></div>
+        <p style={{color:'var(--text-secondary)',lineHeight:1.8,whiteSpace:'pre-wrap'}}>{c.description||c.story|| (isAr?'لا يوجد وصف إضافي.':'No additional description.')}</p>
+        <div className="case-details-grid" style={{marginTop:16}}>
+          <div className="case-detail-item"><div className="text-xs text-muted">{isAr?'الموقع':'Location'}</div><strong>{c.location||'—'}</strong></div>
+          <div className="case-detail-item"><div className="text-xs text-muted">{isAr?'الأهمية':'Priority'}</div><strong>{urgencyLabels[c.urgencyLevel]||c.urgencyLevel||'—'}</strong></div>
+          <div className="case-detail-item"><div className="text-xs text-muted">{isAr?'تاريخ التقديم':'Submitted'}</div><strong>{fmtDate(c.createdAt,isAr)}</strong></div>
+          <div className="case-detail-item"><div className="text-xs text-muted">{isAr?'آخر تحديث':'Last updated'}</div><strong>{fmtDate(c.updatedAt||c.reviewedAt||c.createdAt,isAr)}</strong></div>
+        </div>
+        {target>0&&<div className="card" style={{padding:14,marginTop:14}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:13}}><strong>{isAr?'المبلغ المطلوب':'Requested amount'}: {fmtNum(target)} {isAr?'ج.س':'SDG'}</strong><span>{isAr?'تم جمع':'Raised'}: {fmtNum(raised)} {isAr?'ج.س':'SDG'}</span></div>
+          <div className="progress-bar" style={{marginTop:10}}><div className="progress-fill animated" style={{width:`${Math.min(Math.round(raised/target*100),100)}%`}}></div></div>
+        </div>}
+        <div className="case-detail-item" style={{marginTop:14}}><strong>{isAr?'تحديث الحالة':'Status update'}</strong><div style={{color:'var(--text-secondary)',marginTop:6,lineHeight:1.7}}>{statusDescription}</div></div>
+        {c.documentUrl&&<a href={c.documentUrl} target="_blank" rel="noreferrer" className="btn btn-outline btn-sm" style={{marginTop:12}}><i className="bi bi-paperclip"></i>{isAr?'فتح المرفق':'Open attachment'}</a>}
+      </div>
+      <div className="modal-footer"><button type="button" className="btn btn-primary" onClick={onClose}>{isAr?'إغلاق':'Close'}</button></div>
+    </div>
+  </div>;
+}
+
+function SupportPage({chat,messages,loading,text,setText,sending,onSend,profile,user,isAr}) {
+  const messagesEndRef=useRef(null);
+  useEffect(()=>{messagesEndRef.current?.scrollIntoView({behavior:'smooth',block:'end'});},[messages]);
+  const messageTime=m=>formatDateTime(m.createdAt||m.timestamp,isAr);
+  return <div style={{maxWidth:860,margin:'0 auto'}}>
+    <div className="section-header" style={{marginBottom:18}}>
+      <div className="section-title"><div className="section-bar"></div>{isAr?'الدعم والمحادثات':'Support chat'}</div>
+    </div>
+    <div className="card" style={{padding:16}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,padding:'4px 4px 14px',borderBottom:'1px solid var(--border)'}}>
+        <div className="avatar"><i className="bi bi-headset"></i></div>
+        <div><strong>{isAr?'فريق الدعم':'Support team'}</strong><div className="text-xs text-muted">{isAr?'أرسل رسالتك وسيرد عليك فريق الإدارة':'Send a message and the admin team will reply'}</div></div>
+        <span className="badge badge-status-distributed" style={{marginInlineStart:'auto'}}><i className="bi bi-circle-fill" style={{fontSize:7,marginInlineEnd:5}}></i>{isAr?'محادثة مباشرة':'Live chat'}</span>
+      </div>
+      {loading&&!chat?<div className="empty-state"><div className="spinner"></div><p>{isAr?'جارٍ فتح المحادثة...':'Opening chat...'}</p></div>:<div className="chat-messages" aria-live="polite">
+        {messages.length===0?<div className="empty-state" style={{padding:30}}><i className="bi bi-chat-dots"></i><p>{isAr?'ابدأ محادثة جديدة مع فريق الدعم':'Start a conversation with support'}</p></div>:messages.map(m=>{
+          const mine=m.senderId===user?.uid||m.sender==='user';
+          return <div className={`chat-message ${mine?'mine':''}`} key={m.id}>
+            <div style={{fontSize:11,fontWeight:800,color:'var(--brand-500)',marginBottom:4}}>{mine?(m.senderName||profile.name|| (isAr?'أنت':'You')):(m.senderName|| (isAr?'الدعم':'Support'))}</div>
+            <div style={{whiteSpace:'pre-wrap',lineHeight:1.65}}>{m.text}</div>
+            <div style={{fontSize:10,color:'var(--text-muted)',textAlign:'end',marginTop:5}}>{messageTime(m)}</div>
+          </div>;
+        })}
+        <div ref={messagesEndRef}></div>
+      </div>}
+      <form onSubmit={onSend} style={{display:'flex',gap:8,borderTop:'1px solid var(--border)',paddingTop:14}}>
+        <input className="form-input" value={text} onChange={e=>setText(e.target.value)} maxLength={2000} placeholder={isAr?'اكتب رسالتك لفريق الدعم...':'Write a message to support...'} aria-label={isAr?'رسالة الدعم':'Support message'} disabled={!chat||sending} />
+        <button type="submit" className="btn btn-primary" style={{width:'auto',flexShrink:0}} disabled={!text.trim()||!chat||sending} aria-label={isAr?'إرسال':'Send'}>{sending?<div className="spinner"></div>:<><i className="bi bi-send-fill"></i><span className="hide-mobile"> {isAr?'إرسال':'Send'}</span></>}</button>
+      </form>
+    </div>
+  </div>;
 }
 
 // ═══════════════════════════════════════

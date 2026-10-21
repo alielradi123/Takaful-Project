@@ -41,7 +41,7 @@
 import { auth, db, storage } from 'firebase-config';
 import {
   collection, query, where, orderBy, onSnapshot, limit,
-  doc, updateDoc, addDoc, getDoc, getDocs, serverTimestamp, Timestamp, deleteDoc
+  doc, updateDoc, addDoc, setDoc, getDoc, getDocs, serverTimestamp, Timestamp, deleteDoc
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-storage.js';
 import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
@@ -50,6 +50,31 @@ import { uploadMultipleToSupabase } from 'supabase-config';
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 // ─── HELPERS ───
+const normalizeDonationStatus = value => {
+  const status = String(value || '').trim().toLowerCase();
+  if (['under review','pending','قيد المراجعة'].includes(status)) return 'قيد المراجعة';
+  if (['collecting','approved','قيد الجمع'].includes(status)) return 'قيد الجمع';
+  if (['received','تم الاستلام'].includes(status)) return 'تم الاستلام';
+  if (['distributed','completed','تم التوزيع'].includes(status)) return 'تم التوزيع';
+  if (['rejected','مرفوض'].includes(status)) return 'مرفوض';
+  if (['payment failed','failed','فشل الدفع'].includes(status)) return 'فشل الدفع';
+  if (['awaiting payment','بانتظار الدفع'].includes(status)) return 'بانتظار الدفع';
+  return value || 'قيد الجمع';
+};
+const normalizeDonationCategory = value => {
+  const category = String(value || '').trim().toLowerCase();
+  if (['in-kind','in kind','عيني'].includes(category)) return 'عيني';
+  if (['financial','مالي'].includes(category)) return 'مالي';
+  if (['medical','طبي','صحة'].includes(category)) return 'طبي';
+  return value || 'مالي';
+};
+const numericDonationAmount = donation => {
+  if (['عيني','in-kind','in kind'].includes(String(donation.category || '').toLowerCase())) return 0;
+  const amount = Number(donation.amount);
+  if (Number.isFinite(amount) && amount > 0) return amount;
+  const parsed = parseFloat(String(donation.amountOrItem || '').replace(/,/g, ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
 const ini = (n='') => (n||'م').trim().split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'م';
 const fmtNum = n => Number(n||0).toLocaleString('ar');
 const fmtDate = ts => {
@@ -197,6 +222,20 @@ function App() {
   // ── Data listeners ──
   useEffect(()=>{
     if(loading||!user) return;
+    const donationSources = {
+      userId: new Map(),
+      donorId: new Map()
+    };
+    const publishDonations = () => {
+      const merged = new Map([...donationSources.userId, ...donationSources.donorId]);
+      const docs = [...merged.values()];
+      docs.sort((a,b)=>{
+        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.timestamp?.toMillis ? a.timestamp.toMillis() : 0);
+        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.timestamp?.toMillis ? b.timestamp.toMillis() : 0);
+        return tB - tA;
+      });
+      setDonations(docs);
+    };
     const subs = [
       onSnapshot(doc(db,'settings','general'), s => setSystemSettings(s.exists() ? s.data() : {})),
       // Match the public Firestore rule: only approved cases are visible to donors.
@@ -211,13 +250,24 @@ function App() {
       }),
       // My donations
       onSnapshot(query(collection(db,'donations'),where('userId','==',user.uid)),s=>{
-        const docs = s.docs.map(d=>({id:d.id,...d.data()}));
-        docs.sort((a,b)=>{
-          const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.timestamp?.toMillis ? a.timestamp.toMillis() : 0);
-          const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.timestamp?.toMillis ? b.timestamp.toMillis() : 0);
-          return tB - tA;
-        });
-        setDonations(docs);
+        donationSources.userId = new Map(s.docs.map(d=>{
+          const data = d.data();
+          return [d.id,{id:d.id,...data,status:normalizeDonationStatus(data.status),category:normalizeDonationCategory(data.category)}];
+        }));
+        publishDonations();
+      },err=>{
+        console.error('User donations listener error:', err);
+        showToast('error', 'تعذر مزامنة تبرعاتك: ' + err.message);
+      }),
+      onSnapshot(query(collection(db,'donations'),where('donorId','==',user.uid)),s=>{
+        donationSources.donorId = new Map(s.docs.map(d=>{
+          const data = d.data();
+          return [d.id,{id:d.id,...data,status:normalizeDonationStatus(data.status),category:normalizeDonationCategory(data.category)}];
+        }));
+        publishDonations();
+      },err=>{
+        console.error('Donor donations listener error:', err);
+        showToast('error', 'تعذر مزامنة التبرعات القديمة: ' + err.message);
       }),
       // My chats — auto-create support chat if none exists (like Android)
       onSnapshot(query(collection(db,'chats'),where('userId','==',user.uid)),async s=>{
@@ -495,7 +545,7 @@ function App() {
           {page==='home' && !selectedCase && !donateCase && <HomePage cases={cases} donations={donations} greeting={greeting} profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} onViewAll={()=>setPage('cases')} onViewDonations={()=>setPage('donations')} isAr={isAr} />}
           {page==='cases' && !selectedCase && !donateCase && <CasesPage cases={cases} onCaseClick={c=>{setSelectedCase(c);setPage('detail')}} isAr={isAr} />}
           {page==='detail' && selectedCase && !donateCase && <CaseDetailPage c={selectedCase} onBack={()=>{setSelectedCase(null);setPage('cases')}} onDonate={()=>{setDonateCase(selectedCase);setPage('donate')}} user={user} profile={profile} isAr={isAr} />}
-          {page==='donate' && donateCase && <DonationFormPage c={donateCase} cases={cases} user={user} profile={profile} onBack={()=>{setDonateCase(null);setPage(selectedCase?'detail':'cases')}} onSuccess={()=>{setDonateCase(null);setSelectedCase(null);setPage('donations')}} isAr={isAr} />}
+          {page==='donate' && donateCase && <DonationFormPage c={donateCase} cases={cases} donations={donations} user={user} profile={profile} onBack={()=>{setDonateCase(null);setPage(selectedCase?'detail':'cases')}} onSuccess={()=>{setDonateCase(null);setSelectedCase(null);setPage('donations')}} isAr={isAr} />}
           {page==='donations' && <DonationsPage donations={donations} isAr={isAr} />}
           {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} isAr={isAr} />}
           {page==='profile' && <ProfilePage profile={profile} myTotalAmt={myTotalAmt} casesHelped={casesHelped} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
@@ -579,9 +629,32 @@ function SmartSlider({ cases, onCaseClick, isAr }) {
 // ═══════════════════════════════════════
 // HOME PAGE
 // ═══════════════════════════════════════
+function recommendDonorCases(cases, donations) {
+  const preferences = new Map();
+  const supportedCaseIds = new Set();
+  donations.forEach(donation => {
+    if (donation.status === 'مرفوض' || ['FAILED', 'CANCELLED', 'EXPIRED'].includes(String(donation.paymentStatus || '').toUpperCase())) return;
+    if (donation.category) preferences.set(donation.category, (preferences.get(donation.category) || 0) + 1);
+    if (donation.caseId) supportedCaseIds.add(donation.caseId);
+  });
+
+  return cases.map((item, index) => {
+    const target = Number(item.targetAmount || item.amountRequired || 0);
+    const raised = Number(item.raisedAmount || item.amountRaised || 0);
+    const remainingRatio = target > 0 ? Math.max(0, Math.min(1, (target - raised) / target)) : 0;
+    const urgent = ['high', 'عاجل', 'urgent'].includes(String(item.urgencyLevel || '').toLowerCase());
+    const categoryPreference = Math.min(preferences.get(item.category) || 0, 3);
+    const alreadySupported = supportedCaseIds.has(item.id);
+    const score = (urgent ? 40 : 0) + remainingRatio * 20 + categoryPreference * 12 + (alreadySupported ? 0 : 10);
+    const created = item.createdAt?.toMillis ? item.createdAt.toMillis() : item.timestamp?.toMillis ? item.timestamp.toMillis() : 0;
+    return {item, index, score, created};
+  }).sort((a, b) => b.score - a.score || b.created - a.created || a.index - b.index)
+    .map(entry => entry.item);
+}
+
 function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCaseClick,onViewAll,onViewDonations,isAr}) {
   const recent = donations.slice(0,3);
-  const recommended = cases.slice(0,6);
+  const recommended = recommendDonorCases(cases, donations).slice(0,6);
   const urgentCases = cases.filter(c=>c.urgencyLevel==='high'||c.urgencyLevel==='عاجل'||c.urgencyLevel==='urgent').slice(0,3);
   const sliderCases = urgentCases.length > 0 ? urgentCases : recommended.slice(0, 4);
   return (
@@ -679,6 +752,7 @@ function HomePage({cases,donations,greeting,profile,myTotalAmt,casesHelped,onCas
         <div className="section-title"><div className="section-bar"></div>{isAr ? 'حالات مقترحة لك' : 'Recommended Cases'}</div>
         <div className="section-action" onClick={onViewAll}>{isAr ? 'عرض الكل' : 'View All'} <i className={`bi ${isAr?'bi-chevron-left':'bi-chevron-right'}`}></i></div>
       </div>
+      {recommended.length > 0 && <p className="text-sm text-muted" style={{marginTop:-12,marginBottom:16}}>{isAr ? 'ترتيب ذكي يراعي الحالات التي دعمتها ودرجة الاحتياج.' : 'Ranked using the causes you have supported and each case’s level of need.'}</p>}
       {recommended.length === 0 ? (
         <div className="card"><div className="empty-state"><i className="bi bi-heart"></i><h3>{isAr ? 'لا توجد حالات حالياً' : 'No cases currently available'}</h3><p>{isAr ? 'سنبلغك فور توفر حالات جديدة' : 'We will notify you when new cases are available'}</p></div></div>
       ) : (
@@ -960,8 +1034,12 @@ function LegacyDonationFormPage({c, cases, user, profile, onBack, onSuccess, isA
           receiptUrl = urls[0];
         }
       }
-
+      const donationRef = doc(collection(db, 'donations'));
+      const donationTransactionId = (payment.includes('بطاقة') || payment.includes('Card'))
+        ? `CARD_${Date.now()}`
+        : transactionId.trim();
       const donationData = {
+        donationId: donationRef.id,
         caseId: selectedCaseId,
         caseTitle: selectedCaseTitle,
         donorId: user.uid,
@@ -970,21 +1048,29 @@ function LegacyDonationFormPage({c, cases, user, profile, onBack, onSuccess, isA
         amount: donationType === 'عيني' ? 0 : amt,
         amountOrItem: donationType === 'عيني' ? amountOrItem.trim() : `${fmtNum(amt)} ${isAr?'ج.س':'SDG'}`,
         paymentMethod: payment,
+        paymentProvider: payment,
+        paymentGatewayName: payment,
+        paymentMode: isRecurring && donationType === 'مالي' ? 'subscription' : 'one_time',
+        paymentStatus: 'pending',
+        caseAmountApplied: false,
         category: donationType,
         donorMessage: donorMessage.trim(),
-        transactionId: (payment.includes('بطاقة') || payment.includes('Card')) ? 'CARD_' + Date.now() : transactionId.trim(),
+        transactionId: donationTransactionId,
+        paymentRef: donationTransactionId,
         isRecurring: isRecurring && donationType === 'مالي',
         recurringInterval: recurringInterval,
+        recurringNextDate: 0,
+        recurringStatus: isRecurring && donationType === 'مالي' ? 'active' : 'none',
         receiptUrl: receiptUrl,
         ocrText: ocrText,
         aiSuspicionFlag: aiSuspicionFlag,
         cardNumber: (payment.includes('بطاقة') || payment.includes('Card')) ? cardNumber.slice(-4) : null,
-        status: (payment.includes('بطاقة') || payment.includes('Card')) ? 'قيد المراجعة' : 'قيد الجمع',
+        status: 'قيد المراجعة',
         timestamp: serverTimestamp(),
         createdAt: serverTimestamp(),
         date: new Intl.DateTimeFormat('ar',{year:'numeric',month:'long',day:'numeric'}).format(new Date())
       };
-      await addDoc(collection(db,'donations'), donationData);
+      await setDoc(donationRef, donationData);
       showToast('success', isAr ? 'تم إرسال تبرعك وإيصال التحويل بنجاح! جزاك الله خيراً 💚' : 'Donation & receipt submitted successfully! Thank you 💚');
       onSuccess();
     } catch(e) {
@@ -1196,7 +1282,7 @@ function LegacyDonationFormPage({c, cases, user, profile, onBack, onSuccess, isA
 // ═══════════════════════════════════════
 // DONATION WIZARD
 // ═══════════════════════════════════════
-function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
+function DonationFormPage({c, cases, donations, user, profile, onBack, onSuccess, isAr}) {
   const [step, setStep] = useState(1);
   const [donationType, setDonationType] = useState(c?.category || 'مالي');
   const [amount, setAmount] = useState('');
@@ -1223,12 +1309,28 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
     {name:'Bede', icon:'bi-credit-card-2-front-fill', logo:'https://play-lh.googleusercontent.com/Xd7eefBK_gaGnGDkdYPtoxp67XmjSiBg6T56JLRAkt9-etxrV5VI8uvxeoMdy1ALFEbWMOjRT7zQzyqdB_Ykww=w240-h480-rw', alt:'Bede Sudan'},
     {name:'Bravo', icon:'bi-cash-coin', logo:'https://play-lh.googleusercontent.com/0FJnRLzkh5NhSooUgYAruQ3CzehDZ005b9dYvhAlnHBPY9ayuGFFIY3Wu7EXY8JryrpDIWTddRqQgPh56qD-zQ=w240-h480-rw', alt:'Bravo Sudan'},
     {name:isAr ? 'بطاقة Visa من بنك الخرطوم عبر يلا باي (مرة واحدة)' : 'Bank of Khartoum Visa via YallaPay (one-time)', icon:'bi-credit-card-2-front-fill'},
+    {name:isAr ? 'بطاقة بنك الخرطوم عبر يلا باي (خصم تلقائي شهري)' : 'Bank of Khartoum Visa via YallaPay (monthly automatic debit)', icon:'bi-arrow-repeat', recurring:true},
   ];
   const labels = isAr ? ['المبلغ', 'الدفع', 'التفاصيل', 'العملية', 'الإيصال', 'التأكيد'] : ['Amount', 'Payment', 'Details', 'Transaction', 'Receipt', 'Confirm'];
   const money = parseFloat(amount) || 0;
   const isInKind = donationType === 'عيني';
   const isAutomaticDebit = payment.includes('خصم تلقائي') || payment.includes('automatic debit');
   const isYallaPay = payment.includes('يلا باي') || payment.includes('YallaPay') || isAutomaticDebit;
+  const previousAmounts = (donations || [])
+    .filter(donation => numericDonationAmount(donation) > 0
+      && donation.status !== 'مرفوض'
+      && !['PENDING', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(String(donation.paymentStatus || '').toUpperCase()))
+    .slice(0, 5)
+    .map(numericDonationAmount)
+    .sort((a, b) => a - b);
+  const medianPreviousAmount = previousAmounts.length
+    ? previousAmounts[Math.floor(previousAmounts.length / 2)]
+    : 0;
+  const selectedCase = cases.find(item => item.id === selectedCaseId);
+  const targetAmount = Number(selectedCase?.targetAmount || selectedCase?.amountRequired || 0);
+  const raisedAmount = Number(selectedCase?.raisedAmount || selectedCase?.amountRaised || 0);
+  const remainingAmount = targetAmount > 0 ? Math.max(0, targetAmount - raisedAmount) : 0;
+  const suggestedAmount = Math.max(1000, Math.round((medianPreviousAmount || (remainingAmount ? Math.min(remainingAmount, remainingAmount / 10) : 10000)) / 1000) * 1000);
   const needsReceipt = !isInKind;
   const paymentDetails = isAutomaticDebit
     ? (isAr ? 'سيتم خصم المبلغ المحدد شهرياً من بطاقتك لمدة تصل إلى 12 دفعة عبر بوابة يلا باي.' : 'The selected amount will be charged monthly to your card for up to 12 payments through YallaPay.')
@@ -1336,12 +1438,18 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
         }
       }
       setSubmitStatus(isAr ? 'جارٍ تسجيل التبرع...' : 'Saving donation...');
-      await addDoc(collection(db, 'donations'), {
+      const donationRef = doc(collection(db, 'donations'));
+      await setDoc(donationRef, {
+        donationId: donationRef.id,
         caseId: selectedCaseId, caseTitle: selectedCaseTitle, donorId: user.uid, userId: user.uid,
         donorName: profile.name || '', amount: isInKind ? 0 : money,
         amountOrItem: isInKind ? amountOrItem.trim() : `${fmtNum(money)} ${isAr ? 'ج.س' : 'SDG'}`,
-        paymentMethod: payment, category: donationType, donorMessage: donorMessage.trim(),
-        transactionId: transactionId.trim(), receiptUrl, ocrText, aiSuspicionFlag,
+        paymentMethod: payment, paymentProvider: payment, paymentGatewayName: payment,
+        paymentMode: 'one_time', paymentStatus: 'pending', caseAmountApplied: false,
+        category: donationType, donorMessage: donorMessage.trim(),
+        paymentRef: transactionId.trim(), transactionId: transactionId.trim(),
+        receiptUrl, ocrText, aiSuspicionFlag,
+        isRecurring: false,
         status: 'قيد المراجعة', timestamp: serverTimestamp(), createdAt: serverTimestamp(),
         date: new Intl.DateTimeFormat('ar', {year:'numeric', month:'long', day:'numeric'}).format(new Date())
       });
@@ -1367,10 +1475,19 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
         {step === 1 && <>
           <div className="wizard-panel-title"><i className="bi bi-coin"></i>{isAr ? 'اختر مبلغ التبرع' : 'Choose donation amount'}</div>
           {!c && <div className="form-group"><label className="form-label">{isAr ? 'الحالة المستفيدة' : 'Beneficiary case'}</label><select className="form-input" value={selectedCaseId} onChange={e => { setSelectedCaseId(e.target.value); setSelectedCaseTitle(e.target.value ? cases.find(item => item.id === e.target.value)?.title || '' : (isAr ? 'تبرع عام' : 'General Donation')); }}><option value="">{isAr ? 'تبرع عام' : 'General Donation'}</option>{cases.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></div>}
+          {selectedCase && (selectedCase.imageUrls?.[0] || selectedCase.imageUrl || selectedCase.documentUrl) && <div style={{display:'flex',alignItems:'center',gap:12,margin:'-4px 0 16px',padding:10,border:'1px solid var(--border)',borderRadius:12,background:'var(--surface)'}}><img src={selectedCase.imageUrls?.[0] || selectedCase.imageUrl || selectedCase.documentUrl} alt={selectedCase.title || selectedCaseTitle} style={{width:72,height:60,objectFit:'cover',borderRadius:8,flexShrink:0}} /><strong className="truncate">{selectedCase.title || selectedCaseTitle}</strong></div>}
           <div className="form-group"><label className="form-label">{isAr ? 'نوع التبرع' : 'Donation type'}</label><div className="amount-chips">{['مالي','عيني','طبي'].map(type => <button key={type} className={`amount-chip ${donationType === type ? 'active' : ''}`} onClick={() => setDonationType(type)}>{isAr ? type : type === 'مالي' ? 'Financial' : type === 'عيني' ? 'In-kind' : 'Medical'}</button>)}</div></div>
-          {isInKind ? <div className="form-group"><label className="form-label">{isAr ? 'وصف التبرع' : 'Donation description'}</label><input className="form-input" value={amountOrItem} onChange={e => setAmountOrItem(e.target.value)} placeholder={isAr ? 'مثال: 10 بطانيات' : 'e.g. 10 blankets'} /></div> : <><div className="amount-presets">{['10000','25000','50000','100000'].map(value => <button key={value} className={`amount-preset-btn ${amount === value ? 'active' : ''}`} onClick={() => setAmount(value)}>{fmtNum(value)} {isAr ? 'ج.س' : 'SDG'}</button>)}</div><div className="form-group"><label className="form-label">{isAr ? 'أو أدخل مبلغًا آخر' : 'Or enter another amount'}</label><input className="form-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" /></div></>}
+          {isInKind ? <div className="form-group"><label className="form-label">{isAr ? 'وصف التبرع' : 'Donation description'}</label><input className="form-input" value={amountOrItem} onChange={e => setAmountOrItem(e.target.value)} placeholder={isAr ? 'مثال: 10 بطانيات' : 'e.g. 10 blankets'} /></div> : <>
+            <button type="button" className="amount-preset-btn" style={{width:'100%',minHeight:56,marginBottom:14,borderColor:'var(--brand-500)',textAlign:isAr?'right':'left'}} onClick={() => setAmount(String(suggestedAmount))}>
+              <i className="bi bi-lightbulb-fill" style={{color:'var(--gold-500)',marginInlineEnd:8}}></i>
+              {isAr ? `مبلغ مقترح: ${fmtNum(suggestedAmount)} ج.س` : `Suggested amount: ${fmtNum(suggestedAmount)} SDG`}
+              <small style={{display:'block',fontSize:11,fontWeight:500,marginTop:4,color:'var(--text-muted)'}}>{medianPreviousAmount ? (isAr ? 'استناداً إلى متوسط تبرعاتك السابقة' : 'Based on your previous donation amounts') : remainingAmount ? (isAr ? 'تقدير مبدئي وفق احتياج الحالة المتبقي' : 'An estimate based on the case’s remaining need') : (isAr ? 'يمكنك تعديل المبلغ قبل المتابعة' : 'You can change this amount before continuing')}</small>
+            </button>
+            <div className="amount-presets">{['10000','25000','50000','100000'].map(value => <button key={value} className={`amount-preset-btn ${amount === value ? 'active' : ''}`} onClick={() => setAmount(value)}>{fmtNum(value)} {isAr ? 'ج.س' : 'SDG'}</button>)}</div>
+            <div className="form-group"><label className="form-label">{isAr ? 'أو أدخل مبلغًا آخر' : 'Or enter another amount'}</label><input className="form-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" /></div>
+          </>}
         </>}
-        {step === 2 && <><div className="wizard-panel-title"><i className="bi bi-wallet2"></i>{isAr ? 'اختر طريقة الدفع' : 'Choose payment method'}</div><div className="payment-grid">{paymentMethods.map(method => <div key={method.name} className={`payment-option ${payment === method.name ? 'selected' : ''}`} onClick={() => setPayment(method.name)}><div className="payment-radio"></div>{method.logo ? <img className="payment-brand-logo" src={method.logo} alt={method.alt} loading="lazy" onError={e => { const fallback = document.createElement('i'); fallback.className = `bi ${method.icon} payment-brand-fallback`; fallback.setAttribute('aria-hidden', 'true'); e.currentTarget.replaceWith(fallback); }} /> : <i className={`bi ${method.icon} payment-brand-fallback`} aria-hidden="true"></i>}<span>{method.name}</span></div>)}</div></>}
+        {step === 2 && <><div className="wizard-panel-title"><i className="bi bi-wallet2"></i>{isAr ? 'اختر طريقة الدفع' : 'Choose payment method'}</div><div className="payment-grid">{paymentMethods.map(method => <div key={method.name} className={`payment-option ${payment === method.name ? 'selected' : ''}`} onClick={() => setPayment(method.name)} role="button" tabIndex="0" onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPayment(method.name); } }}><div className="payment-radio"></div>{method.logo ? <img className="payment-brand-logo" src={method.logo} alt={method.alt} loading="lazy" onError={e => { const fallback = document.createElement('i'); fallback.className = `bi ${method.icon} payment-brand-fallback`; fallback.setAttribute('aria-hidden', 'true'); e.currentTarget.replaceWith(fallback); }} /> : <i className={`bi ${method.icon} payment-brand-fallback`} aria-hidden="true"></i>}<span>{method.name}</span>{method.recurring && <small style={{flexBasis:'100%',fontSize:11,color:'var(--text-muted)',textAlign:'center'}}>{isAr ? 'شهرياً، حتى 12 دفعة' : 'Monthly, up to 12 payments'}</small>}</div>)}</div>{paymentMethods.find(method => method.name === payment)?.recurring && <div className="bank-info-card" style={{marginTop:14}}><strong>{isAr ? 'خصم تلقائي شهري عبر يلا باي' : 'Monthly automatic debit via YallaPay'}</strong><p className="text-sm text-muted" style={{margin:'6px 0 0'}}>{isAr ? 'ستنتقل لإتمام إعداد الاشتراك لدى يلا باي. لا يتم إنشاء الاشتراك إلا بعد موافقتك الصريحة وإكمال الدفع لدى المزود.' : 'Continue to YallaPay to set up the subscription. It is only submitted after your explicit consent and completion of the provider checkout.'}</p></div>}</>}
         {step === 3 && <><div className="wizard-panel-title"><i className="bi bi-info-circle"></i>{isAr ? 'تفاصيل الدفع' : 'Payment details'}</div><div className="bank-info-card"><div className="bank-label">{isAr ? 'طريقة الدفع المختارة' : 'Selected method'}</div><div className="bank-value">{payment}</div>{payment === 'BOK' && <div className="qr-payment-box"><img src="img/بنكك.jpg" alt={isAr ? 'رمز QR الخاص بتكافل' : 'Takaful QR code'} /><strong>{isAr ? 'امسح الرمز عبر تطبيق بنكك' : 'Scan with the BOK app'}</strong></div>}{(payment === 'ساهل' || payment === 'Sahil') && <div className="qr-payment-box"><img src="img/sahil-qr.jpg" alt={isAr ? 'رمز QR للدفع عبر ساهل' : 'Sahil payment QR code'} /><strong>{isAr ? 'امسح الرمز عبر تطبيق ساهل' : 'Scan with the Sahil app'}</strong></div>}{payment === 'Cashi' && <div className="qr-payment-box"><img src="img/cashi-qr.png" alt={isAr ? 'رمز QR للدفع عبر كاشي' : 'Cashi payment QR code'} /><strong>{isAr ? 'امسح الرمز داخل تطبيق كاشي' : 'Scan the code in the Cashi app'}</strong></div>}<p className="text-sm text-muted" style={{marginTop:10}}>{payment === 'BOK' ? (isAr ? 'افتح تطبيق بنكك، امسح الرمز، وأكمل التحويل إلى حساب تكافل.' : 'Open the BOK app, scan the code, and complete the transfer to Takaful.') : (payment === 'ساهل' || payment === 'Sahil') ? (isAr ? 'افتح تطبيق ساهل وامسح الرمز لإتمام التحويل إلى الحساب الظاهر في الصورة.' : 'Open Sahil and scan the code to transfer to the account shown.') : payment === 'Cashi' ? (isAr ? 'افتح تطبيق كاشي وامسح الرمز لإتمام التحويل إلى الحساب الظاهر في الصورة.' : 'Open Cashi and scan the code to transfer to the account shown.') : paymentDetails}</p>{payment === 'تحويل مصرفي' && <div className="account-details"><div><span className="bank-label">{isAr ? 'اسم الحساب' : 'Account name'}</span><strong className="bank-value">{isAr ? 'علي الرضي الفضل محمد' : 'Ali Al-Radhi Al-Fadl Mohammed'}</strong></div><div><span className="bank-label">{isAr ? 'رقم الحساب' : 'Account number'}</span><strong className="bank-value" dir="ltr">04037418080001</strong></div><button className="bank-copy-btn" onClick={() => { navigator.clipboard.writeText('04037418080001'); showToast('success', isAr ? 'تم نسخ رقم الحساب' : 'Account number copied'); }}><i className="bi bi-copy"></i>{isAr ? 'نسخ رقم الحساب' : 'Copy account number'}</button></div>}</div><div className="form-group" style={{marginTop:16}}><label className="form-label">{isAr ? 'رسالة مع التبرع (اختياري)' : 'Message (optional)'}</label><textarea className="form-input" rows="3" value={donorMessage} onChange={e => setDonorMessage(e.target.value)} /></div></>}
         {step === 3 && payment === 'BOK' && <div className="account-details">
           <div><span className="bank-label">{isAr ? 'اسم الحساب' : 'Account name'}</span><strong className="bank-value">{isAr ? 'علي الرضي الفضل محمد' : 'Ali Al-Radhi Al-Fadl Mohammed'}</strong></div>
@@ -1396,7 +1513,7 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
         {step === 3 && payment === 'BOK' && <a className="qr-download-btn" href="img/بنكك.jpg" download="takaful-bankak-qr.jpg" title={isAr ? 'حفظ رمز بنكك' : 'Download Bankak QR'} aria-label={isAr ? 'حفظ رمز بنكك' : 'Download Bankak QR'}><i className="bi bi-download" aria-hidden="true"></i></a>}
         {step === 3 && (payment === 'ساهل' || payment === 'Sahil') && <a className="qr-download-btn" href="img/sahil-qr.jpg" download="takaful-sahil-qr.jpg" title={isAr ? 'حفظ رمز ساهل' : 'Download Sahil QR'} aria-label={isAr ? 'حفظ رمز ساهل' : 'Download Sahil QR'}><i className="bi bi-download" aria-hidden="true"></i></a>}
         {step === 3 && payment === 'Cashi' && <a className="qr-download-btn" href="img/cashi-qr.png" download="takaful-cashi-qr.png" title={isAr ? 'حفظ رمز كاشي' : 'Download Cashi QR'} aria-label={isAr ? 'حفظ رمز كاشي' : 'Download Cashi QR'}><i className="bi bi-download" aria-hidden="true"></i></a>}
-        {step === 3 && isAutomaticDebit && <label style={{display:'flex',alignItems:'flex-start',gap:10,marginTop:14,cursor:'pointer',lineHeight:1.7}}><input type="checkbox" checked={subscriptionConsent} onChange={event => setSubscriptionConsent(event.target.checked)} style={{marginTop:5,flex:'0 0 auto'}} /><span>{isAr ? `أوافق على خصم ${fmtNum(money)} ج.س شهرياً لمدة تصل إلى 12 دفعة. لا يدعم التطبيق إلغاء الاشتراك ذاتياً حالياً.` : `I authorize a monthly charge of ${fmtNum(money)} SDG for up to 12 payments. Self-service cancellation is not currently available in the app.`}</span></label>}
+        {step === 3 && isAutomaticDebit && <div className="bank-info-card" style={{marginTop:14}}><label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer',lineHeight:1.7}}><input type="checkbox" checked={subscriptionConsent} onChange={event => setSubscriptionConsent(event.target.checked)} style={{marginTop:5,flex:'0 0 auto'}} /><span>{isAr ? `أوافق صراحةً على خصم ${fmtNum(money)} ج.س من بطاقتي شهرياً، لمدة تصل إلى 12 دفعة، عبر يلا باي. لا تتوفر إدارة الإيقاف أو الإلغاء من هذه البوابة؛ حالة التفويض المباشرة لدى المزود غير معروضة هنا.` : `I explicitly authorize YallaPay to charge ${fmtNum(money)} SDG to my card monthly for up to 12 payments. This portal does not provide pause or cancellation controls and cannot show the provider’s live authorization status.`}</span></label><p className="text-xs text-muted" style={{margin:'10px 0 0'}}>{isAr ? 'لن تتم متابعة إعداد الاشتراك دون تحديد هذه الموافقة. أكمل الدفع الآمن لدى يلا باي لتأكيد الاشتراك.' : 'Subscription checkout cannot continue unless you give this consent. Complete secure checkout with YallaPay to confirm the subscription.'}</p></div>}
         {step === 4 && <><div className="wizard-panel-title"><i className="bi bi-receipt"></i>{isAr ? 'أدخل رقم العملية' : 'Enter transaction number'}</div><p className="text-sm text-muted" style={{marginBottom:16}}>{isAr ? 'اكتب الرقم الظاهر في إشعار التحويل أو التطبيق.' : 'Enter the number shown in your transfer receipt or app.'}</p><input className="form-input" value={transactionId} onChange={e => setTransactionId(e.target.value)} placeholder={isAr ? 'مثال: MOM123456789' : 'e.g. MOM123456789'} dir="ltr" style={{textAlign:'left'}} /></>}
         {step === 5 && <><div className="wizard-panel-title"><i className="bi bi-cloud-arrow-up"></i>{isAr ? 'ارفع إيصال الدفع' : 'Upload payment receipt'}</div><label className="receipt-dropzone"><i className="bi bi-camera-fill"></i><strong>{receiptFile ? receiptFile.name : (isAr ? 'اضغط لاختيار صورة الإيصال' : 'Tap to choose receipt image')}</strong><span>{isAr ? 'PNG أو JPG أو PDF' : 'PNG, JPG or PDF'}</span><input type="file" accept="image/*,.pdf" hidden onChange={e => setReceiptFile(e.target.files?.[0] || null)} /></label></>}
         {step === 6 && <><div style={{textAlign:'center',padding:'16px 0 8px'}}><div style={{width:68,height:68,margin:'0 auto 14px',borderRadius:'50%',background:'rgba(16,185,129,.14)',display:'grid',placeItems:'center'}}><i className="bi bi-check-lg" style={{fontSize:34,color:'#10B981'}}></i></div><h2 style={{fontSize:20,fontWeight:900}}>{isAr ? 'تبرعك قيد المراجعة' : 'Donation under review'}</h2><p className="text-sm text-muted" style={{marginTop:6}}>{isAr ? 'شكرًا لمساهمتك. سنحدّثك عند اعتماد العملية.' : 'Thank you. We will update you when it is approved.'}</p></div><div className="wizard-summary"><div className="wizard-summary-item"><small>{isAr ? 'المبلغ' : 'Amount'}</small><strong>{isInKind ? amountOrItem : `${fmtNum(money)} ${isAr ? 'ج.س' : 'SDG'}`}</strong></div><div className="wizard-summary-item"><small>{isAr ? 'الدفع' : 'Payment'}</small><strong>{payment}</strong></div><div className="wizard-summary-item"><small>{isAr ? 'رقم العملية' : 'Transaction'}</small><strong>{transactionId || '—'}</strong></div></div></>}
@@ -1411,9 +1528,16 @@ function DonationFormPage({c, cases, user, profile, onBack, onSuccess, isAr}) {
 // DONATIONS PAGE
 // ═══════════════════════════════════════
 function DonationsPage({donations, isAr}) {
-  const totalAmount = donations.reduce((sum, donation) => sum + (Number(donation.amount) || 0), 0);
+  const totalAmount = donations.reduce((sum, donation) => sum + numericDonationAmount(donation), 0);
   const statusIndex = status => status === 'مرفوض' ? 4 : status === 'تم التوزيع' ? 3 : status === 'تم الاستلام' ? 2 : status === 'قيد الجمع' ? 1 : 0;
   const statusLabels = isAr ? ['قيد المراجعة', 'قيد الجمع', 'تم الاستلام', 'تم التوزيع', 'مرفوض'] : ['Under review', 'Collecting', 'Received', 'Distributed', 'Rejected'];
+  const recurringPlans = new Map();
+  donations.filter(donation => donation.paymentMode === 'subscription').forEach(donation => {
+    const key = donation.clientReferenceId || donation.subscriptionId || donation.id;
+    const plan = recurringPlans.get(key) || {donations: [], amount: numericDonationAmount(donation), caseTitle: donation.caseTitle, maxCycles: Number(donation.maxCycles) || 12};
+    plan.donations.push(donation);
+    recurringPlans.set(key, plan);
+  });
   return (
     <div>
       <div className="section-header" style={{marginBottom:20}}>
@@ -1421,36 +1545,66 @@ function DonationsPage({donations, isAr}) {
         <span className="badge badge-cat">{donations.length} {isAr ? 'تبرع' : 'Donations'}</span>
       </div>
       {donations.length > 0 && <div className="donation-impact"><div className="impact-item"><small>{isAr ? 'إجمالي المساهمات' : 'Total contributions'}</small><strong>{fmtNum(totalAmount)} {isAr ? 'ج.س' : 'SDG'}</strong></div><div className="impact-item"><small>{isAr ? 'الحالات المدعومة' : 'Supported cases'}</small><strong>{new Set(donations.map(d => d.caseId).filter(Boolean)).size}</strong></div></div>}
+      {recurringPlans.size > 0 && <section className="detail-info-card" aria-labelledby="recurring-donations-heading">
+        <div style={{fontSize:16,fontWeight:800,color:'var(--brand-500)',marginBottom:12}} id="recurring-donations-heading"><i className="bi bi-arrow-repeat" style={{marginInlineEnd:8}}></i>{isAr ? 'تبرعاتي الدورية — يلا باي' : 'My recurring donations — YallaPay'}</div>
+        {[...recurringPlans.entries()].map(([planId, plan]) => {
+          const confirmedPayments = plan.donations.filter(donation => normalizeDonationPaymentStatus(donation.paymentStatus) === 'verified').length;
+          return <div key={planId} style={{padding:'12px 0',borderTop:'1px solid var(--border)'}}>
+            <div style={{fontWeight:700}}>{plan.caseTitle || (isAr ? 'تبرع عام' : 'General donation')}</div>
+            <div className="text-sm text-muted" style={{marginTop:4}}>{fmtNum(plan.amount)} {isAr ? 'ج.س شهرياً' : 'SDG monthly'} · {isAr ? `دفعات ناجحة مسجلة: ${confirmedPayments} من ${plan.maxCycles}` : `Successful payments recorded: ${confirmedPayments} of ${plan.maxCycles}`}</div>
+          </div>;
+        })}
+        <p className="text-sm text-muted" style={{margin:'12px 0 0',lineHeight:1.7}}>{isAr ? 'تعرض هذه الأرقام الدفعات الناجحة التي وصل إشعارها إلى سجل تبرعاتك فقط؛ لا تعرض حالة التفويض المباشرة لدى يلا باي. لا تتوفر في هذه البوابة أزرار إيقاف أو إلغاء للاشتراك. للاستفسار عن الخيارات المتاحة، تواصل مع الدعم.' : 'These figures include only successful payments recorded in your donation history; they do not show YallaPay’s live authorization status. This portal has no pause or cancellation controls. Contact support to ask about available options.'}</p>
+      </section>}
       {donations.length === 0 ? (
         <div className="card"><div className="empty-state"><i className="bi bi-gift"></i><h3>{isAr ? 'لم تقم بأي تبرع بعد' : 'You have not made any donations yet'}</h3><p>{isAr ? 'ابدأ بدعم حالة إنسانية اليوم!' : 'Start supporting a humanitarian case today!'}</p></div></div>
       ) : (
         <div className="card">
           {donations.map(d => {
-            const statusClass = d.status==='تم التوزيع'?'badge-status-distributed':d.status==='تم الاستلام'?'badge-status-received':'badge-status-collecting';
+            const paymentStatus = String(d.paymentStatus || '').toUpperCase();
+            const yallaPayPending = paymentStatus === 'PENDING' && (d.paymentProvider === 'YallaPay' || d.paymentGatewayName === 'YallaPay');
+            const paymentPending = yallaPayPending || d.status === 'بانتظار الدفع';
+            const paymentFailed = ['FAILED', 'CANCELLED', 'EXPIRED'].includes(paymentStatus) || d.status === 'فشل الدفع';
+            const paymentVerified = ['SUCCESSFUL', 'VERIFIED'].includes(paymentStatus) || paymentStatus === 'verified';
+            const statusClass = d.status==='مرفوض' || paymentFailed ? 'badge-status-rejected' : d.status==='تم التوزيع'?'badge-status-distributed':d.status==='تم الاستلام'?'badge-status-received':d.status==='قيد المراجعة'?'badge-status-review':'badge-status-collecting';
             return (
-              <div key={d.id} className="donation-item">
-                <div className="donation-icon">
-                  <i className={`bi ${d.status==='تم التوزيع'?'bi-check-circle-fill':d.status==='تم الاستلام'?'bi-arrow-down-circle-fill':'bi-hourglass-split'}`}
-                     style={{color:d.status==='تم التوزيع'?'var(--brand-500)':d.status==='تم الاستلام'?'var(--blue)':'var(--gold-500)'}}></i>
-                </div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div className="bold truncate" style={{fontSize:15}}>{d.caseTitle || (isAr ? 'تبرع عام' : 'General Donation')}</div>
-                  <div className="text-sm text-muted">{d.category==='مالي'?(isAr?'مالي':'Financial'):d.category==='عيني'?(isAr?'عيني':'In-Kind'):d.category==='طبي'?(isAr?'طبي':'Medical'):(d.category||'—')} • {d.paymentMethod||'—'}</div>
-                  <div className="text-xs text-muted" style={{marginTop:2}}>{fmtDate(d.createdAt||d.timestamp)}</div>
-                </div>
-                <div style={{textAlign:isAr?'left':'right'}}>
-                  <div className="bold text-brand" style={{fontSize:15}}>{d.amountOrItem||`${fmtNum(d.amount)} ${isAr?'ج.س':'SDG'}`}</div>
-                  <span className={`badge ${statusClass}`} style={{marginTop:4}}>
-                    {d.status==='تم التوزيع'?(isAr?'تم التوزيع':'Distributed'):d.status==='تم الاستلام'?(isAr?'تم الاستلام':'Received'):(d.status||(isAr?'قيد الجمع':'Collecting'))}
-                  </span>
-                </div>
-                <div style={{width:'100%',flexBasis:'100%'}}>
-                  <div className={`timeline-track ${d.status === 'مرفوض' ? 'is-rejected' : ''}`}>
-                    {statusLabels.map((label, index) => { const rejected = d.status === 'مرفوض'; const active = rejected ? index === 4 : index < 4 && index <= statusIndex(d.status); return <div key={label} className={`timeline-step ${active ? 'active' : ''} ${index === statusIndex(d.status) ? 'current' : ''}`}><span>{label}</span></div>; })}
+              <details key={d.id} style={{borderBottom:'1px solid var(--border)'}}>
+                <summary className="donation-item" style={{listStyle:'none',cursor:'pointer'}}>
+                  <div className="donation-icon">
+                    <i className={`bi ${paymentFailed?'bi-x-circle-fill':paymentPending?'bi-hourglass-split':d.status==='تم التوزيع'?'bi-check-circle-fill':d.status==='تم الاستلام'?'bi-arrow-down-circle-fill':'bi-hourglass-split'}`}
+                       style={{color:paymentFailed?'var(--red)':d.status==='تم التوزيع'?'var(--brand-500)':d.status==='تم الاستلام'?'var(--blue)':'var(--gold-500)'}}></i>
                   </div>
-                  {d.receiptUrl && <a className="btn btn-outline btn-sm" href={d.receiptUrl} target="_blank" rel="noreferrer"><i className="bi bi-download"></i>{isAr ? 'عرض الإيصال' : 'View receipt'}</a>}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div className="bold truncate" style={{fontSize:15}}>{d.caseTitle || (isAr ? 'تبرع عام' : 'General Donation')}</div>
+                    <div className="text-sm text-muted">{d.category==='مالي'?(isAr?'مالي':'Financial'):d.category==='عيني'?(isAr?'عيني':'In-Kind'):d.category==='طبي'?(isAr?'طبي':'Medical'):(d.category||'—')} • {d.paymentMode === 'subscription' ? (isAr ? 'دفعة دورية' : 'Recurring payment') : (d.paymentMethod||'—')}</div>
+                    <div className="text-xs text-muted" style={{marginTop:2}}>{fmtDate(d.paidAt||d.createdAt||d.timestamp)}</div>
+                  </div>
+                  <div style={{textAlign:isAr?'left':'right'}}>
+                    <div className="bold text-brand" style={{fontSize:15}}>{d.amountOrItem||`${fmtNum(d.amount)} ${isAr?'ج.س':'SDG'}`}</div>
+                    <span className={`badge ${statusClass}`} style={{marginTop:4}}>
+                      {paymentPending ? (isAr?'بانتظار الدفع':'Awaiting payment') : paymentFailed ? (isAr?'فشل الدفع':'Payment failed') : d.status==='تم التوزيع'?(isAr?'تم التوزيع':'Distributed'):d.status==='تم الاستلام'?(isAr?'تم الاستلام':'Received'):(d.status||(isAr?'قيد الجمع':'Collecting'))}
+                    </span>
+                  </div>
+                  <i className="bi bi-chevron-down text-muted" aria-hidden="true"></i>
+                </summary>
+                <div style={{padding:'0 20px 18px',lineHeight:1.8}}>
+                  {paymentPending
+                    ? <p className="text-sm text-muted">{isAr ? 'لم يؤكد مزود الدفع العملية بعد. سيظهر تحديثها هنا عند وصول إشعار يلا باي.' : 'The payment provider has not confirmed this transaction yet. Its status will update here when YallaPay sends confirmation.'}</p>
+                    : paymentFailed
+                    ? <p className="text-sm text-muted">{isAr ? 'لم تسجل هذه العملية كدفعة ناجحة. يمكنك بدء تبرع جديد إذا رغبت.' : 'This transaction was not recorded as a successful payment. You can start a new donation if you wish.'}</p>
+                    : <>{paymentVerified && <p className="text-sm text-muted">{isAr ? 'تم تأكيد الدفع إلكترونياً، ويجري تحديث حالة التبرع بشكل مستقل.' : 'Payment was confirmed electronically; donation processing is tracked separately.'}</p>}<div className={`timeline-track ${d.status === 'مرفوض' ? 'is-rejected' : ''}`}>
+                      {statusLabels.map((label, index) => { const rejected = d.status === 'مرفوض'; const active = rejected ? index === 4 : index <= statusIndex(d.status); return <div key={label} className={`timeline-step ${active ? 'active' : ''} ${index === statusIndex(d.status) ? 'current' : ''}`}><span>{label}</span></div>; })}
+                    </div></>}
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:'6px 18px',fontSize:13}}>
+                    <div><strong>{isAr?'طريقة الدفع':'Payment method'}: </strong>{d.paymentMethod || d.paymentProvider || '—'}</div>
+                    <div><strong>{isAr?'رقم العملية':'Transaction reference'}: </strong><span dir="ltr">{d.transactionId || d.paymentReferenceId || '—'}</span></div>
+                    <div><strong>{isAr?'التاريخ':'Date'}: </strong>{fmtDate(d.paidAt||d.createdAt||d.timestamp)}</div>
+                    {d.paymentMode === 'subscription' && <div><strong>{isAr?'نوع الدفع':'Payment type'}: </strong>{isAr?'خصم شهري عبر يلا باي':'Monthly YallaPay subscription'}</div>}
+                    {d.donorMessage && <div style={{gridColumn:'1/-1'}}><strong>{isAr?'رسالتك':'Your message'}: </strong>{d.donorMessage}</div>}
+                  </div>
+                  {d.receiptUrl && <a className="btn btn-outline btn-sm" href={d.receiptUrl} target="_blank" rel="noreferrer" style={{marginTop:12}}><i className="bi bi-download"></i>{isAr ? 'عرض الإيصال' : 'View receipt'}</a>}
                 </div>
-              </div>
+              </details>
             );
           })}
         </div>

@@ -44,7 +44,7 @@
 import { auth, db } from './firebase-config.js';
 import {
   collection, query, orderBy, onSnapshot,
-  doc, updateDoc, deleteDoc, addDoc, setDoc, serverTimestamp, Timestamp,
+  doc, updateDoc, deleteDoc, deleteField, addDoc, setDoc, serverTimestamp, Timestamp,
   writeBatch, increment, getDocs, runTransaction
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { requireAuth, getCurrentUserInfo, logout } from './auth.js';
@@ -60,6 +60,43 @@ const catBadge = cat => {
   if (cat === 'طبي' || cat === 'صحة') return 'badge badge-rejected';
   if (cat === 'عيني') return 'badge badge-completed';
   return 'badge badge-pending';
+};
+const normalizeDonationPaymentStatus = value => {
+  const status = String(value || 'pending').toUpperCase();
+  if (status === 'SUCCESSFUL' || status === 'VERIFIED') return 'verified';
+  if (status === 'FAILED' || status === 'CANCELLED' || status === 'EXPIRED') return 'failed';
+  return status.toLowerCase();
+};
+const normalizeDonationStatus = value => {
+  const status = String(value || '').trim().toLowerCase();
+  if (['under review','pending','قيد المراجعة'].includes(status)) return 'قيد المراجعة';
+  if (['collecting','approved','قيد الجمع'].includes(status)) return 'قيد الجمع';
+  if (['received','تم الاستلام'].includes(status)) return 'تم الاستلام';
+  if (['distributed','completed','تم التوزيع'].includes(status)) return 'تم التوزيع';
+  if (['rejected','مرفوض'].includes(status)) return 'مرفوض';
+  if (['payment failed','failed','فشل الدفع'].includes(status)) return 'فشل الدفع';
+  if (['awaiting payment','بانتظار الدفع'].includes(status)) return 'بانتظار الدفع';
+  return value || 'قيد الجمع';
+};
+const normalizeDonationCategory = value => {
+  const category = String(value || '').trim().toLowerCase();
+  if (['in-kind','in kind','عيني'].includes(category)) return 'عيني';
+  if (['financial','مالي'].includes(category)) return 'مالي';
+  if (['medical','طبي','صحة'].includes(category)) return 'طبي';
+  return value || 'مالي';
+};
+const isInKindDonation = donation => ['عيني', 'in-kind', 'in kind'].includes(String(donation.category || '').toLowerCase());
+const hasUnconfirmedYallaPayPayment = donation =>
+  (donation.paymentProvider === 'YallaPay' || donation.paymentGatewayName === 'YallaPay')
+  && ['pending', 'failed'].includes(normalizeDonationPaymentStatus(donation.paymentStatus));
+const isDonationPaymentVerified = donation =>
+  isInKindDonation(donation) || normalizeDonationPaymentStatus(donation.paymentStatus) === 'verified';
+const numericDonationAmount = donation => {
+  if (isInKindDonation(donation)) return 0;
+  const amount = Number(donation.amount);
+  if (Number.isFinite(amount) && amount > 0) return amount;
+  const parsed = parseFloat(String(donation.amountOrItem || '').replace(/,/g, ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 };
 const STATUS = {
   pending:  {l:'معلق',   c:'badge badge-pending',dot:'#f9a825',i:'bi-clock-fill'},
@@ -179,9 +216,26 @@ function App() {
     if(loading)return;
     const subs=[
       // cases: orderBy createdAt
-      onSnapshot(query(collection(db,'cases'),orderBy('createdAt','desc')),s=>setCases(s.docs.map(d=>({id:d.id,...d.data()})))),
-      // donations: try createdAt (actual field from donations.js)
-onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setDon(s.docs.map(d=>({id:d.id, amountOrItem: d.data().amountOrItem ?? d.data().amount ?? d.data().amountOrItem, createdAt: d.data().createdAt, ...d.data()})))),
+      onSnapshot(query(collection(db,'cases'),orderBy('createdAt','desc')),s=>setCases(s.docs.map(d=>({id:d.id,...d.data()}))),err=>{
+        console.error('Cases listener error:', err);
+        showToast('error', isAr ? 'تعذر تحميل الحالات' : 'Could not load cases', err.message);
+      }),
+      // Read all schema generations; legacy donations may only have a timestamp field.
+      onSnapshot(collection(db,'donations'),s=>{
+        const records = s.docs.map(d=>{
+          const data = d.data();
+          return {id:d.id,...data,status:normalizeDonationStatus(data.status),category:normalizeDonationCategory(data.category),createdAt:data.createdAt||data.timestamp};
+        });
+        const asMillis = value => value?.toMillis ? value.toMillis()
+          : value?.seconds ? value.seconds * 1000
+          : value instanceof Date ? value.getTime()
+          : Number(value) || 0;
+        records.sort((a,b)=>asMillis(b.createdAt)-asMillis(a.createdAt));
+        setDon(records);
+      },err=>{
+        console.error('Donations listener error:', err);
+        showToast('error', isAr ? 'تعذر تحميل التبرعات' : 'Could not load donations', err.message);
+      }),
       onSnapshot(query(collection(db,'users'),orderBy('createdAt','desc')),s=>setUsers(s.docs.map(d=>({id:d.id,...d.data()})))),
       onSnapshot(query(collection(db,'chats'),orderBy('lastMessageTime','desc')),s=>{
         const all = s.docs.map(d=>({id:d.id,...d.data()}));
@@ -297,21 +351,31 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
   const doDelDon = async(donation)=>{
     if(!await showConfirm('حذف التبرع',`حذف تبرع "${donation.donorName||donation.caseTitle||'مجهول'}" نهائياً؟`,'🗑️'))return;
     try {
-      await deleteDoc(doc(db,'donations',donation.id));
+      await runTransaction(db, async transaction => {
+        const donationRef = doc(db, 'donations', donation.id);
+        const donationSnapshot = await transaction.get(donationRef);
+        if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
+        const currentDonation = {...donationSnapshot.data(),status:normalizeDonationStatus(donationSnapshot.get('status'))};
+        const amount = numericDonationAmount(currentDonation);
+        const wasApplied = currentDonation.caseAmountApplied === true || currentDonation.status === 'تم التوزيع';
+        const caseId = currentDonation.caseId == null ? '' : String(currentDonation.caseId);
+        const caseRef = wasApplied && amount > 0 && caseId ? doc(db, 'cases', caseId) : null;
+        const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
 
-      if((donation.caseAmountApplied || donation.status === 'تم التوزيع') && donation.caseId) {
-        const amount = donation.amount || parseFloat((donation.amountOrItem||'').replace(/[^0-9.]/g,''))||0;
-        if(amount > 0) {
-          try {
-            await updateDoc(doc(db,'cases',donation.caseId),{
-              raisedAmount: increment(-amount),
-              amountRaised: increment(-amount)
-            });
-          } catch(err) {
-            console.warn('Could not update case amount:', err);
-          }
+        transaction.delete(donationRef);
+        if (caseRef && caseSnapshot?.exists()) {
+          const caseData = caseSnapshot.data();
+          const currentRaised = Number(caseData.raisedAmount ?? caseData.amountRaised) || 0;
+          const target = Number(caseData.targetAmount ?? caseData.amountRequired) || 0;
+          const newRaised = Math.max(0, currentRaised - amount);
+          transaction.update(caseRef, {
+            raisedAmount: newRaised,
+            amountRaised: newRaised,
+            progress: target > 0 ? Math.min(1, newRaised / target) : 0,
+            updatedAt: serverTimestamp()
+          });
         }
-      }
+      });
       logActivity('حذف تبرع', `تم حذف تبرع يخص: ${donation.donorName||donation.caseTitle||'مجهول'}`);
       showToast('success','تم الحذف','تم حذف التبرع بنجاح');
     } catch(e) { showToast('error','خطأ',e.message); }
@@ -322,25 +386,52 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
         const donationRef = doc(db, 'donations', id);
         const donationSnapshot = await transaction.get(donationRef);
         if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
-        const donation = donationSnapshot.data();
+        const donation = {...donationSnapshot.data(),status:normalizeDonationStatus(donationSnapshot.get('status'))};
+        if (status === 'قيد الجمع' || status === 'تم الاستلام' || status === 'تم التوزيع') {
+          if (!isDonationPaymentVerified(donation)) throw new Error('يجب تأكيد الدفع قبل متابعة التبرع');
+        }
+        if (status === 'فشل الدفع' && normalizeDonationPaymentStatus(donation.paymentStatus) !== 'failed') {
+          throw new Error('تعذر تأكيد فشل الدفع من بوابة الدفع');
+        }
+        if (status === 'تم الاستلام' && donation.status !== 'قيد الجمع') {
+          throw new Error('يجب أن يكون التبرع في مرحلة الجمع قبل تأكيد استلامه');
+        }
+        if (status === 'تم التوزيع' && donation.status !== 'تم الاستلام') {
+          throw new Error('يجب تأكيد استلام التبرع قبل توزيعه');
+        }
         const wasApplied = donation.caseAmountApplied === true || donation.status === 'تم التوزيع';
         const shouldApply = status === 'تم الاستلام' || status === 'تم التوزيع';
-        const amount = Number(donation.amount) || parseFloat((donation.amountOrItem || '').replace(/[^0-9.]/g, '')) || 0;
+        const amount = numericDonationAmount(donation);
         const caseRef = donation.caseId && amount > 0 && wasApplied !== shouldApply
           ? doc(db, 'cases', donation.caseId)
           : null;
         const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
         const caseExists = Boolean(caseSnapshot?.exists());
 
-        transaction.update(donationRef, {
+        const donationUpdate = {
           status,
           caseAmountApplied: shouldApply && (wasApplied || caseExists),
           updatedAt: serverTimestamp()
-        });
+        };
+        if (status === 'تم الاستلام') {
+          donationUpdate.receivedAt = donation.receivedAt || serverTimestamp();
+          donationUpdate.distributedAt = deleteField();
+        } else if (status === 'تم التوزيع') {
+          donationUpdate.receivedAt = donation.receivedAt || serverTimestamp();
+          donationUpdate.distributedAt = donation.distributedAt || serverTimestamp();
+        } else {
+          donationUpdate.receivedAt = deleteField();
+          donationUpdate.distributedAt = deleteField();
+        }
+        transaction.update(donationRef, donationUpdate);
         if (caseExists) {
+          const currentRaised = Number(caseSnapshot.data().raisedAmount ?? caseSnapshot.data().amountRaised) || 0;
+          const target = Number(caseSnapshot.data().targetAmount ?? caseSnapshot.data().amountRequired) || 0;
+          const newRaised = Math.max(0, currentRaised + (shouldApply ? amount : -amount));
           transaction.update(caseRef, {
-            raisedAmount: increment(shouldApply ? amount : -amount),
-            amountRaised: increment(shouldApply ? amount : -amount),
+            raisedAmount: newRaised,
+            amountRaised: newRaised,
+            progress: target > 0 ? Math.max(0, Math.min(1, newRaised / target)) : 0,
             updatedAt: serverTimestamp()
           });
         }
@@ -350,6 +441,12 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
     } catch(e) { showToast('error','خطأ',e.message); }
   };
   const doReviewDonation = async(donation, status) => {
+    if(status === 'قيد الجمع' && !isDonationPaymentVerified(donation)) {
+      showToast('warning', isAr ? 'الدفع غير مؤكد' : 'Payment not confirmed', isAr
+        ? 'لا يمكن اعتماد التبرع قبل تأكيد الدفع أو مراجعة الإيصال.'
+        : 'Verify the payment or review its receipt before approving this donation.');
+      return;
+    }
     const title = status === 'قيد الجمع' ? 'موافقة على التبرع' : 'رفض التبرع';
     const message = status === 'قيد الجمع' ? 'سيتم اعتماد التبرع وإرساله لمرحلة الجمع.' : 'سيتم رفض التبرع وإشعار المتبرع.';
     if(!await showConfirm(title, message, status === 'قيد الجمع' ? '✅' : '❌')) return;
@@ -363,6 +460,35 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
       showToast(status === 'قيد الجمع' ? 'success' : 'warning', status === 'قيد الجمع' ? 'تم اعتماد التبرع' : 'تم رفض التبرع', 'تم إشعار المتبرع');
     } catch(e) { showToast('error','خطأ',e.message); }
   };
+  const doReviewDonationPayment = async(donation, paymentStatus) => {
+    const verified = paymentStatus === 'verified';
+    const title = verified ? (isAr ? 'تأكيد الدفع' : 'Verify payment') : (isAr ? 'رفض إثبات الدفع' : 'Reject payment proof');
+    const message = verified
+      ? (isAr ? 'سيتم اعتماد حالة الدفع مع إبقاء حالة التبرع كما هي.' : 'Payment will be verified without changing the donation status.')
+      : (isAr ? 'سيتم رفض إثبات الدفع مع إبقاء حالة التبرع كما هي.' : 'Payment proof will be rejected without changing the donation status.');
+    if(!await showConfirm(title, message, verified ? '✅' : '❌')) return;
+    try {
+      const update = {
+        paymentStatus,
+        updatedAt: serverTimestamp()
+      };
+      if(verified) {
+        update.receiptVerifiedBy = auth.currentUser?.uid || '';
+        update.paymentVerifiedAt = serverTimestamp();
+      } else {
+        update.paymentRejectedAt = serverTimestamp();
+      }
+      await updateDoc(doc(db,'donations',donation.id), update);
+      logActivity(
+        verified ? 'توثيق دفعة تبرع' : 'رفض إثبات دفعة تبرع',
+        `${donation.donorName||'مجهول'} — ${donation.caseTitle||'تبرع عام'} (${donation.amountOrItem||donation.amount||'—'})`
+      );
+      setReviewDonation(null);
+      showToast(verified ? 'success' : 'warning', title, verified
+        ? (isAr ? 'تم توثيق الدفع دون تغيير مرحلة التبرع' : 'Payment verified; donation stage unchanged')
+        : (isAr ? 'تم رفض إثبات الدفع دون تغيير مرحلة التبرع' : 'Payment proof rejected; donation stage unchanged'));
+    } catch(e) { showToast('error', isAr ? 'خطأ' : 'Error', e.message); }
+  };
 
   // تأكيد الاستلام — يكتب receivedAt حقيقي في Firebase
   const doConfirmReceived = async(id, donorName)=>{
@@ -372,11 +498,12 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
         const donationRef = doc(db, 'donations', id);
         const donationSnapshot = await transaction.get(donationRef);
         if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
-        const donation = donationSnapshot.data();
+        const donation = {...donationSnapshot.data(),status:normalizeDonationStatus(donationSnapshot.get('status'))};
         if (donation.status === 'تم الاستلام' || donation.status === 'تم التوزيع') return;
         if (donation.status !== 'قيد الجمع') throw new Error('يجب اعتماد التبرع قبل تأكيد استلامه');
+        if (!isDonationPaymentVerified(donation)) throw new Error('يجب تأكيد الدفع قبل استلام التبرع');
 
-        const amount = Number(donation.amount) || parseFloat((donation.amountOrItem || '').replace(/[^0-9.]/g, '')) || 0;
+        const amount = numericDonationAmount(donation);
         const caseRef = donation.caseId && amount > 0 ? doc(db, 'cases', donation.caseId) : null;
         const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
         const applyAmount = Boolean(caseSnapshot?.exists() && !donation.caseAmountApplied);
@@ -388,9 +515,14 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
           updatedAt: serverTimestamp()
         });
         if (applyAmount) {
+          const caseData = caseSnapshot.data();
+          const currentRaised = Number(caseData.raisedAmount ?? caseData.amountRaised) || 0;
+          const target = Number(caseData.targetAmount ?? caseData.amountRequired) || 0;
+          const newRaised = currentRaised + amount;
           transaction.update(caseRef, {
-            raisedAmount: increment(amount),
-            amountRaised: increment(amount),
+            raisedAmount: newRaised,
+            amountRaised: newRaised,
+            progress: target > 0 ? Math.min(1, newRaised / target) : 0,
             updatedAt: serverTimestamp()
           });
         }
@@ -409,30 +541,17 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
         const donationRef = doc(db, 'donations', donation.id);
         const donationSnapshot = await transaction.get(donationRef);
         if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
-        const currentDonation = donationSnapshot.data();
+        const currentDonation = {...donationSnapshot.data(),status:normalizeDonationStatus(donationSnapshot.get('status'))};
         if (currentDonation.status === 'تم التوزيع') return;
         if (currentDonation.status !== 'تم الاستلام') throw new Error('يجب تأكيد استلام التبرع قبل توزيعه');
-
-        const amount = Number(currentDonation.amount) || parseFloat((currentDonation.amountOrItem || '').replace(/[^0-9.]/g, '')) || 0;
-        const caseRef = currentDonation.caseId && amount > 0 && !currentDonation.caseAmountApplied
-          ? doc(db, 'cases', currentDonation.caseId)
-          : null;
-        const caseSnapshot = caseRef ? await transaction.get(caseRef) : null;
-        const applyAmount = Boolean(caseSnapshot?.exists());
+        if (!isDonationPaymentVerified(currentDonation)) throw new Error('يجب تأكيد الدفع قبل توزيع التبرع');
 
         transaction.update(donationRef, {
           status: 'تم التوزيع',
           distributedAt: serverTimestamp(),
-          caseAmountApplied: currentDonation.caseAmountApplied === true || applyAmount,
+          caseAmountApplied: currentDonation.caseAmountApplied === true,
           updatedAt: serverTimestamp()
         });
-        if (applyAmount) {
-          transaction.update(caseRef, {
-            raisedAmount: increment(amount),
-            amountRaised: increment(amount),
-            updatedAt: serverTimestamp()
-          });
-        }
       });
       logActivity('تأكيد توزيع', `تم توزيع تبرع من: ${donation.donorName||'مجهول'}`);
       confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: ['#66BB6A', '#FFF', '#2E7D32'] });
@@ -537,7 +656,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
 
   const pending  = cases.filter(c=>c.status==='pending');
   const approved = cases.filter(c=>c.status==='approved');
-  const totalAmt = donations.reduce((s,d)=>s+(parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0),0);
+  const totalAmt = donations.reduce((sum,donation)=>sum+numericDonationAmount(donation),0);
 
   const NAV_GROUPS = isAr
     ? {main:'الرئيسية', data:'إدارة البيانات', analytics:'التحليلات والتقارير', system:'إعدادات النظام'}
@@ -716,7 +835,7 @@ onSnapshot(query(collection(db,'donations'),orderBy('createdAt','desc')),s=>setD
 
       {/* VOLUNTEER ASSIGN MODAL */}
       {assignModal && <AssignVolunteerModal caseItem={assignModal} users={users} onClose={()=>setAssignModal(null)} isAr={isAr} />}
-      {reviewDonation && <DonationReviewModal donation={reviewDonation} isAr={isAr} onClose={()=>setReviewDonation(null)} onReview={doReviewDonation} />}
+      {reviewDonation && <DonationReviewModal donation={reviewDonation} isAr={isAr} onClose={()=>setReviewDonation(null)} onReview={doReviewDonation} onReviewPayment={doReviewDonationPayment} />}
     </div>
   );
 }
@@ -1276,15 +1395,25 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
 // ══════════════════════════════════════════
 // DONATION FORM MODAL
 // ══════════════════════════════════════════
-function DonationModal({init, cases, onClose, isAr}) {
+function DonationModal({init, cases, users = [], onClose, isAr}) {
   const isEdit=!!init?.id;
   const [f,setF]=useState({
-    donorName:init?.donorName||'', caseTitle:init?.caseTitle||'', caseId:init?.caseId||'',
+    donorName:init?.donorName||'', caseTitle:init?.caseTitle||(isAr?'تبرع عام':'General Donation'), caseId:init?.caseId||'',
     amountOrItem:init?.amountOrItem||'', paymentMethod:init?.paymentMethod||'تحويل بنكي',
-    category:init?.category||'مالي', status:init?.status||'قيد الجمع', notes:init?.notes||'',
+    category:['in-kind','in kind'].includes(String(init?.category||'').toLowerCase()) ? 'عيني' : init?.category === 'Financial' ? 'مالي' : init?.category === 'Medical' ? 'طبي' : (init?.category||'مالي'),
+    userId:init?.userId||init?.donorId||'', notes:init?.notes||'',
   });
   const [saving,setSaving]=useState(false);
   const up=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const handleDonorChange = e => {
+    const userId = e.target.value;
+    const selectedUser = users.find(user => (user.uid || user.id) === userId);
+    setF(previous => ({
+      ...previous,
+      userId,
+      donorName: selectedUser ? (selectedUser.name || selectedUser.fullName || selectedUser.email || previous.donorName) : previous.donorName
+    }));
+  };
 
   const handleCaseChange = (e) => {
     const selectedId = e.target.value;
@@ -1303,12 +1432,64 @@ function DonationModal({init, cases, onClose, isAr}) {
   }
 
   const save=async()=>{
-    if(!f.amountOrItem.trim()){showToast('error',isAr?'بيانات ناقصة':'Missing Data',isAr?'المبلغ أو العطاء مطلوب':'Amount or item contribution is required');return}
+    if(!isEdit && !f.amountOrItem.trim()){showToast('error',isAr?'بيانات ناقصة':'Missing Data',isAr?'المبلغ أو العطاء مطلوب':'Amount or item contribution is required');return}
+    const amount = numericDonationAmount({category:f.category,amountOrItem:f.amountOrItem});
+    if(!isEdit && f.category !== 'عيني' && amount <= 0) {
+      showToast('error',isAr?'مبلغ غير صالح':'Invalid amount',isAr?'أدخل مبلغاً رقمياً صحيحاً':'Enter a valid numeric amount');
+      return;
+    }
     setSaving(true);
     try{
-      const data={...f,updatedAt:serverTimestamp()};
-      if(isEdit){await updateDoc(doc(db,'donations',init.id),data);showToast('success',isAr?'تم التعديل':'Updated',isAr?'تم تحديث التبرع':'Donation updated successfully')}
-      else{await addDoc(collection(db,'donations'),{...data,createdAt:serverTimestamp()});showToast('success',isAr?'تمت الإضافة':'Recorded',isAr?'تم تسجيل التبرع':'Donation recorded successfully')}
+      if(isEdit){
+        const selectedUser = users.find(user => (user.uid || user.id) === f.userId);
+        const update = {
+          donorName: selectedUser ? (selectedUser.name || selectedUser.fullName || selectedUser.email || f.donorName) : f.donorName,
+          paymentMethod: f.paymentMethod,
+          paymentProvider: f.paymentMethod,
+          paymentGatewayName: f.paymentMethod,
+          notes: f.notes,
+          updatedAt: serverTimestamp()
+        };
+        if(f.userId) {
+          update.userId = f.userId;
+          update.donorId = f.userId;
+        } else {
+          update.userId = deleteField();
+          update.donorId = deleteField();
+        }
+        await updateDoc(doc(db,'donations',init.id),update);
+        showToast('success',isAr?'تم التعديل':'Updated',isAr?'تم تحديث بيانات المتبرع دون تغيير مبلغ/مرحلة التبرع':'Donor details updated without changing donation amount or stage');
+      } else {
+        const donationRef = doc(collection(db,'donations'));
+        await setDoc(donationRef,{
+          donationId: donationRef.id,
+          donorName: f.donorName,
+          userId: f.userId,
+          donorId: f.userId,
+          caseId: f.caseId,
+          caseTitle: f.caseTitle,
+          amount: f.category === 'عيني' ? 0 : amount,
+          amountOrItem: f.amountOrItem.trim(),
+          paymentMethod: f.paymentMethod,
+          paymentProvider: f.paymentMethod,
+          paymentGatewayName: f.paymentMethod,
+          paymentMode: 'one_time',
+          paymentStatus: f.category === 'عيني' ? 'not_required' : 'pending',
+          paymentRef: '',
+          transactionId: '',
+          caseAmountApplied: false,
+          category: f.category,
+          isRecurring: false,
+          recurringInterval: 'none',
+          recurringStatus: 'none',
+          donorMessage: f.notes,
+          status: 'قيد المراجعة',
+          createdAt: serverTimestamp(),
+          timestamp: serverTimestamp(),
+          date: new Intl.DateTimeFormat('ar',{year:'numeric',month:'long',day:'numeric'}).format(new Date())
+        });
+        showToast('success',isAr?'تمت الإضافة':'Recorded',isAr?'تم تسجيل التبرع للمراجعة والتحقق':'Donation recorded for review and payment verification');
+      }
       onClose();
     }catch(e){showToast('error',isAr?'خطأ':'Error',e.message)}finally{setSaving(false)}
   };
@@ -1316,10 +1497,19 @@ function DonationModal({init, cases, onClose, isAr}) {
     <Modal title={isEdit?(isAr?'تعديل التبرع':'Edit Donation'):(isAr?'تسجيل تبرع جديد':'Record New Donation')} icon={isEdit?'bi-pencil-fill':'bi-plus-circle-fill'} onClose={onClose}
       footer={<><button className="btn btn-outline" onClick={onClose}>{isAr ? 'إلغاء' : 'Cancel'}</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<><div className="spinner-border spinner-border-sm me-1"></div>{isAr ? 'جارٍ الحفظ...' : 'Saving...'}</>:<><i className="bi bi-check-lg"></i>{isEdit?(isAr ? 'حفظ التعديلات' : 'Save Changes'):(isAr ? 'تسجيل التبرع' : 'Record Donation')}</>}</button></>}>
       <div className="row g-3">
+        <div className="col-md-6">
+          <Field label={isAr ? "ربط بحساب متبرع" : "Link donor account"}>
+            <select className="form-input" value={f.userId} onChange={handleDonorChange}>
+              <option value="">{isAr ? 'بدون ربط بحساب' : 'No linked account'}</option>
+              {users.filter(user => ['donor','متبرع'].includes(String(user.role||'').toLowerCase()))
+                .map(user => <option key={user.uid||user.id} value={user.uid||user.id}>{user.name||user.fullName||user.email||user.id}</option>)}
+            </select>
+          </Field>
+        </div>
         <div className="col-md-6"><Field label={isAr ? "اسم المتبرع" : "Donor Name"}><input className="form-input" value={f.donorName} onChange={up('donorName')} placeholder={isAr ? "الاسم الكامل أو مجهول" : "Full Name or Anonymous"} /></Field></div>
         <div className="col-md-6">
           <Field label={isAr ? "الحالة المستفيدة" : "Beneficiary Case"}>
-            <select className="form-input" value={f.caseId} onChange={handleCaseChange}>
+            <select className="form-input" value={f.caseId} onChange={handleCaseChange} disabled={isEdit}>
               <option value="">{isAr ? 'تبرع عام' : 'General Donation'}</option>
               {approvedCases.map(c => (
                 <option key={c.id} value={c.id}>{c.title}</option>
@@ -1327,10 +1517,10 @@ function DonationModal({init, cases, onClose, isAr}) {
             </select>
           </Field>
         </div>
-        <div className="col-md-6"><Field label={isAr ? "المبلغ / العطاء *" : "Amount / Item *"}><input className="form-input" value={f.amountOrItem} onChange={up('amountOrItem')} placeholder={isAr ? "مثال: 500 ج.س أو ملابس" : "e.g. 500 SDG or Clothes"} /></Field></div>
-        <div className="col-md-6"><Field label={isAr ? "طريقة الدفع" : "Payment Method"}><select className="form-input" value={f.paymentMethod} onChange={up('paymentMethod')}><option>{isAr ? 'تحويل بنكي' : 'Bank Transfer'}</option><option>{isAr ? 'نقداً' : 'Cash'}</option><option>{isAr ? 'بطاقة ائتمانية' : 'Credit Card'}</option><option>{isAr ? 'عيني' : 'In-kind'}</option></select></Field></div>
-        <div className="col-md-6"><Field label={isAr ? "الفئة" : "Category"}><select className="form-input" value={f.category} onChange={up('category')}><option>{isAr ? 'مالي' : 'Financial'}</option><option>{isAr ? 'عيني' : 'In-kind'}</option><option>{isAr ? 'طبي' : 'Medical'}</option></select></Field></div>
-        <div className="col-md-6"><Field label={isAr ? "الحالة" : "Status"}><select className="form-input" value={f.status} onChange={up('status')}><option>{isAr ? 'قيد الجمع' : 'Collecting'}</option><option>{isAr ? 'تم الاستلام' : 'Received'}</option><option>{isAr ? 'تم التوزيع' : 'Distributed'}</option></select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "المبلغ / العطاء *" : "Amount / Item *"}><input className="form-input" value={f.amountOrItem} onChange={up('amountOrItem')} placeholder={isAr ? "مثال: 500 ج.س أو ملابس" : "e.g. 500 SDG or Clothes"} disabled={isEdit} /></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "طريقة الدفع" : "Payment Method"}><select className="form-input" value={f.paymentMethod} onChange={up('paymentMethod')}><option value="تحويل بنكي">{isAr ? 'تحويل بنكي' : 'Bank Transfer'}</option><option value="نقداً">{isAr ? 'نقداً' : 'Cash'}</option><option value="بطاقة ائتمانية">{isAr ? 'بطاقة ائتمانية' : 'Credit Card'}</option><option value="عيني">{isAr ? 'عيني' : 'In-kind'}</option></select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "الفئة" : "Category"}><select className="form-input" value={f.category} onChange={up('category')} disabled={isEdit}><option value="مالي">{isAr ? 'مالي' : 'Financial'}</option><option value="عيني">{isAr ? 'عيني' : 'In-kind'}</option><option value="طبي">{isAr ? 'طبي' : 'Medical'}</option></select></Field></div>
+        <div className="col-md-6"><Field label={isAr ? "مرحلة التبرع" : "Donation stage"}><input className="form-input" value={isEdit ? normalizeDonationStatus(init.status) : (isAr ? 'قيد المراجعة' : 'Under review')} disabled /></Field></div>
         <div className="col-12"><Field label={isAr ? "ملاحظات" : "Notes"}><textarea className="form-input" rows={3} value={f.notes} onChange={up('notes')} placeholder={isAr ? "أي ملاحظات إضافية..." : "Any additional notes..."} style={{resize:'vertical'}} /></Field></div>
       </div>
     </Modal>
@@ -1340,19 +1530,34 @@ function DonationModal({init, cases, onClose, isAr}) {
 // ══════════════════════════════════════════
 // DONATIONS VIEW
 // ══════════════════════════════════════════
-function DonationReviewModal({donation, isAr, onClose, onReview}) {
+function DonationReviewModal({donation, isAr, onClose, onReview, onReviewPayment}) {
   const statusSteps = isAr ? ['قيد المراجعة','قيد الجمع','تم الاستلام','تم التوزيع','مرفوض'] : ['Under review','Collecting','Received','Distributed','Rejected'];
   const statusIndex = donation.status === 'مرفوض' ? 4 : donation.status === 'تم التوزيع' ? 3 : donation.status === 'تم الاستلام' ? 2 : donation.status === 'قيد الجمع' ? 1 : 0;
   const receiptIsImage = donation.receiptUrl && /\.(jpeg|jpg|gif|png|webp|bmp)(?:\?.*)?$/i.test(donation.receiptUrl);
-  return <Modal title={isAr ? 'مراجعة التبرع' : 'Review Donation'} icon="bi-shield-check" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>{isAr ? 'إغلاق' : 'Close'}</button>{donation.status === 'قيد المراجعة' && <><button className="btn btn-reject" onClick={()=>onReview(donation,'مرفوض')}><i className="bi bi-x-circle"></i>{isAr ? 'رفض' : 'Reject'}</button><button className="btn btn-primary" onClick={()=>onReview(donation,'قيد الجمع')}><i className="bi bi-check-circle"></i>{isAr ? 'اعتماد التبرع' : 'Approve donation'}</button></>}</>}>
+  const paymentStatus = normalizeDonationPaymentStatus(donation.paymentStatus);
+  const paymentStatusLabels = {
+    pending: isAr ? 'بانتظار التحقق' : 'Pending verification',
+    verified: isAr ? 'تم التحقق من الدفع' : 'Payment verified',
+    failed: isAr ? 'فشل الدفع' : 'Payment failed',
+    rejected: isAr ? 'مرفوض' : 'Rejected',
+    not_required: isAr ? 'غير مطلوب' : 'Not required'
+  };
+  const gatewayPaymentPending = hasUnconfirmedYallaPayPayment(donation);
+  const canVerifyPayment = donation.category !== 'عيني' && paymentStatus !== 'verified' && paymentStatus !== 'failed' && !gatewayPaymentPending;
+  const canRejectPayment = donation.category !== 'عيني' && paymentStatus !== 'rejected' && paymentStatus !== 'failed' && !gatewayPaymentPending;
+  return <Modal title={isAr ? 'مراجعة التبرع' : 'Review Donation'} icon="bi-shield-check" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>{isAr ? 'إغلاق' : 'Close'}</button>{canRejectPayment && <button className="btn btn-reject" onClick={()=>onReviewPayment(donation,'rejected')}><i className="bi bi-x-circle"></i>{isAr ? 'رفض إثبات الدفع' : 'Reject payment'}</button>}{canVerifyPayment && <button className="btn btn-primary" onClick={()=>onReviewPayment(donation,'verified')}><i className="bi bi-patch-check"></i>{isAr ? 'تأكيد الدفع' : 'Verify payment'}</button>}{donation.status === 'قيد المراجعة' && <><button className="btn btn-reject" onClick={()=>onReview(donation,'مرفوض')}><i className="bi bi-x-circle"></i>{isAr ? 'رفض التبرع' : 'Reject donation'}</button><button className="btn btn-primary" onClick={()=>onReview(donation,'قيد الجمع')}><i className="bi bi-check-circle"></i>{isAr ? 'اعتماد التبرع' : 'Approve donation'}</button></>}</>}>
     <div className="donation-review-grid">
       <div className="donation-review-field"><small>{isAr ? 'المتبرع' : 'Donor'}</small><strong>{donation.donorName || (isAr ? 'مجهول' : 'Anonymous')}</strong></div>
       <div className="donation-review-field"><small>{isAr ? 'الحالة المستفيدة' : 'Beneficiary case'}</small><strong>{donation.caseTitle || (isAr ? 'تبرع عام' : 'General donation')}</strong></div>
       <div className="donation-review-field"><small>{isAr ? 'المبلغ / العطاء' : 'Amount / item'}</small><strong>{donation.amountOrItem || donation.amount || '—'}</strong></div>
       <div className="donation-review-field"><small>{isAr ? 'طريقة الدفع' : 'Payment method'}</small><strong>{donation.paymentMethod || '—'}</strong></div>
-      <div className="donation-review-field"><small>{isAr ? 'رقم العملية' : 'Transaction ID'}</small><strong>{donation.transactionId || '—'}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'حالة الدفع' : 'Payment status'}</small><strong style={{color:paymentStatus==='verified'?'var(--primary-light)':paymentStatus==='rejected'?'var(--red-light)':'var(--gold)'}}>{paymentStatusLabels[paymentStatus]||paymentStatus}</strong></div>
+      <div className="donation-review-field"><small>{isAr ? 'رقم العملية' : 'Transaction ID'}</small><strong>{donation.transactionId || donation.paymentReferenceId || donation.paymentRef || '—'}</strong></div>
       <div className="donation-review-field"><small>{isAr ? 'تحليل الإيصال' : 'Receipt analysis'}</small><strong style={{color:donation.aiSuspicionFlag?'var(--red-light)':'var(--primary-light)'}}>{donation.aiSuspicionFlag ? (isAr ? 'يحتاج مراجعة' : 'Needs review') : (isAr ? 'مطابق مبدئيًا' : 'Initially matched')}</strong></div>
     </div>
+    {paymentStatus === 'verified' && (donation.receiptVerifiedBy || donation.paymentVerifiedAt) && <div className="donation-review-field" style={{marginTop:10}}><small>{isAr ? 'تم التحقق بواسطة / التاريخ' : 'Verified by / date'}</small><strong>{donation.receiptVerifiedBy || '—'}{donation.paymentVerifiedAt ? ` · ${formatDate(donation.paymentVerifiedAt)}` : ''}</strong></div>}
+    {gatewayPaymentPending && <p className="text-muted" style={{marginTop:10}}>{isAr ? 'حالة الدفع مرتبطة مباشرة بيلا باي ولا يمكن تعديلها يدوياً قبل وصول نتيجة المزود.' : 'This payment is controlled by YallaPay and cannot be manually changed before the provider reports a result.'}</p>}
+    {paymentStatus === 'rejected' && donation.paymentRejectedAt && <div className="donation-review-field" style={{marginTop:10}}><small>{isAr ? 'تاريخ رفض الدفع' : 'Payment rejected at'}</small><strong>{formatDate(donation.paymentRejectedAt)}</strong></div>}
     <div className="donation-review-timeline">{statusSteps.map((label,index)=>{const rejected=donation.status==='مرفوض';const active=rejected?index===4:index<4&&index<=statusIndex;return <div key={label} className={`donation-review-step ${active?'active':''} ${index===statusIndex?'current':''}`}><span>{label}</span></div>;})}</div>
     {donation.donorMessage && <div className="donation-review-field" style={{marginTop:14}}><small>{isAr ? 'رسالة المتبرع' : 'Donor message'}</small><strong>{donation.donorMessage}</strong></div>}
     {donation.receiptUrl && <div style={{marginTop:14}}>{receiptIsImage ? <img className="donation-receipt-preview" src={donation.receiptUrl} alt={isAr ? 'إيصال التبرع' : 'Donation receipt'} onClick={()=>window.open(donation.receiptUrl,'_blank')} /> : <a className="btn btn-outline" href={donation.receiptUrl} target="_blank" rel="noreferrer"><i className="bi bi-receipt"></i>{isAr ? 'فتح الإيصال' : 'Open receipt'}</a>}</div>}
@@ -1369,17 +1574,17 @@ function DonationsView({donations, cases, users, doDonStat, doReviewDonation, se
     return mq&&(st==='all'||d.status===st);
   });
 
-  const DON_STATUSES=['قيد المراجعة','قيد الجمع','تم الاستلام','تم التوزيع','مرفوض'];
+  const DON_STATUSES=['قيد المراجعة','قيد الجمع','تم الاستلام','تم التوزيع','مرفوض','فشل الدفع'];
 
   // Summary stats
   const total    = donations.length;
-  const totalAmt = donations.reduce((s,d)=>s+(parseFloat((d.amountOrItem||'').replace(/[^0-9.]/g,''))||0),0);
+  const totalAmt = donations.reduce((sum,donation)=>sum+numericDonationAmount(donation),0);
   const distrib  = donations.filter(d=>d.status==='تم التوزيع').length;
   const pending  = donations.filter(d=>d.status==='قيد الجمع').length;
 
   return (
     <div className="donations-page">
-      {modal&&<DonationModal init={modal==='new'?null:modal} cases={cases} onClose={()=>setModal(null)} isAr={isAr} />}
+      {modal&&<DonationModal init={modal==='new'?null:modal} cases={cases} users={users} onClose={()=>setModal(null)} isAr={isAr} />}
 
       {/* Mini stats */}
       <div className="stats-grid">
@@ -1455,8 +1660,11 @@ function DonationsView({donations, cases, users, doDonStat, doReviewDonation, se
                         <div>
                           {d.paymentMethod||'—'}
                           {d.isRecurring && <span className="badge mx-1" style={{background:'var(--brand-500)',color:'#fff',fontSize:'9px'}}>{isAr ? 'خصم دوري' : 'Recurring'}</span>}
+                          <span className="badge mx-1" style={{background:normalizeDonationPaymentStatus(d.paymentStatus)==='verified'?'rgba(34,197,94,.16)':(['rejected','failed'].includes(normalizeDonationPaymentStatus(d.paymentStatus)))?'rgba(239,68,68,.16)':'rgba(249,168,37,.16)',color:normalizeDonationPaymentStatus(d.paymentStatus)==='verified'?'var(--primary-light)':(['rejected','failed'].includes(normalizeDonationPaymentStatus(d.paymentStatus)))?'var(--red-light)':'var(--gold)',fontSize:'9px'}}>
+                            {normalizeDonationPaymentStatus(d.paymentStatus)==='verified' ? (isAr ? 'دفع موثق' : 'Payment verified') : normalizeDonationPaymentStatus(d.paymentStatus)==='failed' ? (isAr ? 'فشل الدفع' : 'Payment failed') : normalizeDonationPaymentStatus(d.paymentStatus)==='rejected' ? (isAr ? 'دفع مرفوض' : 'Payment rejected') : (isAr ? 'الدفع بانتظار التحقق' : 'Payment pending')}
+                          </span>
                         </div>
-                        {d.transactionId && <div style={{marginTop:4, color:'var(--brand-500)', fontWeight:600}}><i className="bi bi-hash"></i> {d.transactionId}</div>}
+                        {(d.transactionId || d.paymentReferenceId || d.paymentRef) && <div style={{marginTop:4, color:'var(--brand-500)', fontWeight:600}}><i className="bi bi-hash"></i> {d.transactionId || d.paymentReferenceId || d.paymentRef}</div>}
                         {d.cardNumber && <div style={{marginTop:4, fontSize:'0.65rem'}}><i className="bi bi-credit-card"></i> {isAr ? 'المنتهية بـ' : 'Ending in'} {d.cardNumber}</div>}
                         {d.receiptUrl && (
                           <div style={{marginTop:4}}>
@@ -1493,8 +1701,8 @@ function DonationsView({donations, cases, users, doDonStat, doReviewDonation, se
                       </td>
                       <td data-label={isAr ? 'إجراءات' : 'Actions'}>
                         <div className="d-flex gap-1">
-                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setReviewDonation(d)} title={isAr ? "مراجعة التفاصيل" : "Review details"}>
-                            <i className="bi bi-eye"></i>
+                          <button className="btn btn-outline btn-icon btn-sm" onClick={()=>setReviewDonation(d)} title={d.paymentStatus !== 'verified' ? (isAr ? 'مراجعة إثبات الدفع' : 'Review payment proof') : (isAr ? 'مراجعة التفاصيل' : 'Review details')}>
+                            <i className={`bi ${d.paymentStatus !== 'verified' ? 'bi-receipt-cutoff' : 'bi-eye'}`}></i>
                           </button>
                           {d.status === 'قيد الجمع' && (
                             <button className="btn btn-outline btn-icon btn-sm" style={{borderColor:'var(--primary-light)',color:'var(--primary-light)'}} onClick={()=>doConfirmReceived(d.id, d.donorName)} title={isAr ? "تأكيد الاستلام" : "Confirm Receipt"}>
@@ -1871,7 +2079,7 @@ function ReportsView({donations, cases, users, isAr}) {
       if(!ts)return;
       const date=ts.toDate?ts.toDate():new Date(ts);
       const key=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
-      const amt = parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0;
+      const amt = numericDonationAmount(d);
       map[key]=(map[key]||0)+amt;
     });
     const sorted=Object.entries(map).sort(([a],[b])=>a.localeCompare(b)).slice(-12); // last 12 months
@@ -1882,7 +2090,7 @@ function ReportsView({donations, cases, users, isAr}) {
     const map={};
     filteredDonations.forEach(d=>{
       const k=d.category||(isAr ? 'مالي' : 'Financial');
-      const amt = parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0;
+      const amt = numericDonationAmount(d);
       map[k]=(map[k]||0)+amt;
     });
     return{labels:Object.keys(map),data:Object.values(map)};
@@ -1934,7 +2142,7 @@ function ReportsView({donations, cases, users, isAr}) {
   },[catData, isAr]);
 
   // Insights Calculations
-  const totalAmt = filteredDonations.reduce((s,d)=>s+(parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,''))||0),0);
+  const totalAmt = filteredDonations.reduce((sum,donation)=>sum+numericDonationAmount(donation),0);
   const recurring = filteredDonations.filter(d=>d.isRecurring).length;
   const topDonors = filteredDonations.reduce((acc,d)=>{
     const n = d.donorName||(isAr ? 'مجهول' : 'Anonymous');
@@ -1942,7 +2150,7 @@ function ReportsView({donations, cases, users, isAr}) {
     const pUrl = d.photoURL || d.donorPhotoURL || (dUser ? dUser.photoURL : null);
     if (!acc[n]) acc[n] = { amt: 0, photoURL: pUrl };
     if (!acc[n].photoURL && pUrl) acc[n].photoURL = pUrl;
-    acc[n].amt += (parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,''))||0);
+    acc[n].amt += numericDonationAmount(d);
     return acc;
   },{});
   const topDonorsList = Object.entries(topDonors).sort(([,a],[,b])=>b.amt-a.amt).slice(0,5);
@@ -1965,7 +2173,7 @@ function ReportsView({donations, cases, users, isAr}) {
       return isAr ? {
         'رقم التبرع': d.id,
         'اسم المتبرع': d.donorName || 'مجهول',
-        'قيمة التبرع': parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0,
+        'قيمة التبرع': numericDonationAmount(d),
         'نوع التبرع': d.category || 'مالي',
         'الحالة': d.status || 'معلق',
         'التاريخ': dDate.toLocaleDateString('ar-SA'),
@@ -1976,7 +2184,7 @@ function ReportsView({donations, cases, users, isAr}) {
       } : {
         'Donation ID': d.id,
         'Donor Name': d.donorName || 'Anonymous',
-        'Amount': parseFloat(String(d.amount||d.amountOrItem||'0').replace(/[^0-9.]/g,'')) || 0,
+        'Amount': numericDonationAmount(d),
         'Category': d.category || 'Financial',
         'Status': d.status || 'Pending',
         'Date': dDate.toLocaleDateString('en-US'),

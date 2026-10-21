@@ -916,11 +916,11 @@ html[dir="ltr"] .password-toggle{right:14px;left:auto}
 .wizard-title h2{font-size:21px;font-weight:900;margin-bottom:3px}
 .wizard-title p{font-size:13px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .step-indicator{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:18px}
-.step-item{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--text-muted);font-size:10px;font-weight:700;text-align:center}
-.step-item::before{content:attr(data-step);display:grid;place-items:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:var(--bg-card);color:var(--text-muted);font-size:12px}
-.step-item.active,.step-item.done{color:var(--brand-400)}
-.step-item.active::before,.step-item.done::before{border-color:var(--brand-500);background:rgba(232,80,10,.14);color:var(--brand-400)}
-.step-item.done::before{content:'✓';background:var(--brand-500);color:#fff}
+.step-indicator .step-item{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--text-muted);font-size:10px;font-weight:700;text-align:center}
+.step-indicator .step-item::before{content:attr(data-step);display:grid;place-items:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:var(--bg-card);color:var(--text-muted);font-size:12px}
+.step-indicator .step-item.active,.step-indicator .step-item.done{color:var(--brand-400)}
+.step-indicator .step-item.active::before,.step-indicator .step-item.done::before{border-color:var(--brand-500);background:rgba(232,80,10,.14);color:var(--brand-400)}
+.step-indicator .step-item.done::before{content:'✓';background:var(--brand-500);color:#fff}
 .wizard-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-xl);padding:24px;box-shadow:var(--shadow-sm);animation:wizard-enter .28s ease both}
 .wizard-panel.has-qr-account{display:flex;flex-direction:column}
 .wizard-panel.has-qr-account>.account-details{order:2}
@@ -985,8 +985,8 @@ html[dir="ltr"] .password-toggle{right:14px;left:auto}
   .wizard-title h2{font-size:18px}
   .wizard-title p{font-size:12px}
   .step-indicator{gap:3px}
-  .step-item{font-size:8px}
-  .step-item::before{width:25px;height:25px;font-size:11px}
+  .step-indicator .step-item{font-size:8px}
+  .step-indicator .step-item::before{width:25px;height:25px;font-size:11px}
   .payment-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
   .payment-grid .payment-option{min-height:78px}
   .wizard-summary{grid-template-columns:1fr}

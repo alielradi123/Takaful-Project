@@ -8,6 +8,12 @@
   <link rel="icon" type="image/webp" href="../app-icon.webp">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <link rel="stylesheet" href="donor-style.css">
+  <style>
+    .volunteer-notification-menu{position:absolute;top:calc(100% + 10px);inset-inline-end:0;width:min(360px,calc(100vw - 24px));max-height:420px;overflow:auto;z-index:120;background:var(--bg-sidebar);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);padding:10px}
+    .volunteer-notification-row{padding:12px;border-radius:var(--radius-sm);border-bottom:1px solid var(--border);cursor:pointer}
+    .volunteer-notification-row:last-child{border-bottom:0}
+    .volunteer-notification-row.unread{background:rgba(232,80,10,.08)}
+  </style>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script type="importmap">
@@ -62,6 +68,12 @@ const fmtDate = ts => {
   const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
   return new Intl.DateTimeFormat('ar',{year:'numeric',month:'short',day:'numeric'}).format(d);
 };
+const formatNotificationTime = (ts, isAr) => {
+  if(!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : ts);
+  return new Intl.DateTimeFormat(isAr ? 'ar' : 'en',{dateStyle:'medium',timeStyle:'short'}).format(d);
+};
+const notificationTimestamp = ts => ts?.toMillis ? ts.toMillis() : ts?.toDate ? ts.toDate().getTime() : typeof ts === 'number' ? (ts > 1e12 ? ts : ts*1000) : new Date(ts||0).getTime();
 
 function showToast(type, msg) {
   const c = document.getElementById('toast-container');
@@ -82,6 +94,8 @@ function App() {
   const [systemSettings, setSystemSettings] = useState({});
   const [tasks, setTasks] = useState([]);
   const [myTasks, setMyTasks] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   
@@ -128,19 +142,51 @@ function App() {
   useEffect(()=>{
     if(loading||!user) return;
     const settingsUnsub = onSnapshot(doc(db,'settings','general'), s => setSystemSettings(s.exists() ? s.data() : {}));
-    const qAll = query(collection(db,'cases'), where('status','in',['approved','assigned','completed']));
-    const unsub = onSnapshot(qAll, s => {
+    // Approved cases are publicly readable; assigned/completed cases are not volunteer-readable under
+    // the current rules, so never fetch other volunteers' cases to calculate portal statistics.
+    const unsub = onSnapshot(query(collection(db,'cases'), where('status','in',['approved','active'])), s => {
       const docs = s.docs.map(d=>({id:d.id,...d.data()}));
       
-      // Available tasks (approved and not assigned to anyone yet, AND requires volunteer, e.g. عيني)
-      const available = docs.filter(c => c.status === 'approved' && !c.volunteerId && c.category === 'عيني');
-      
-      // My tasks
-      const mine = docs.filter(c => c.volunteerId === user.uid);
+      // Both the web dashboard and Android app use approved/active for approved cases.
+      const available = docs.filter(c => ['approved','active'].includes(c.status) && !c.volunteerId && !c.assignedVolunteerId && c.category === 'عيني');
 
       setTasks(available);
-      setMyTasks(mine);
+    }, err => {
+      console.error('Task listener error:', err);
+      setTasks([]);
+      showToast('error', isAr ? 'تعذر تحميل المهام المتاحة' : 'Unable to load available tasks');
     });
+    const assignedTasksByField = new Map();
+    const publishAssignedTasks = () => {
+      const tasksById = new Map();
+      assignedTasksByField.forEach(tasks => tasks.forEach(task => tasksById.set(task.id, task)));
+      setMyTasks([...tasksById.values()]);
+    };
+    const myTasksUnsubs = ['volunteerId','assignedVolunteerId'].map(field =>
+      onSnapshot(
+        query(collection(db,'cases'), where(field,'==',user.uid)),
+        s=>{
+          assignedTasksByField.set(field, s.docs.map(d=>({id:d.id,...d.data()})));
+          publishAssignedTasks();
+        },
+        err=>{
+          console.error(`Assigned volunteer tasks listener error (${field}):`, err);
+          assignedTasksByField.delete(field);
+          publishAssignedTasks();
+          showToast('error', isAr ? 'تعذر تحميل مهامك المسندة' : 'Unable to load your assigned tasks');
+        }
+      )
+    );
+
+    const notificationsUnsub = onSnapshot(
+      query(collection(db,'notifications'),where('userId','==',user.uid)),
+      s=>setNotifications(s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>notificationTimestamp(b.timestamp)-notificationTimestamp(a.timestamp))),
+      err=>{
+        console.error('Volunteer notifications listener error:', err);
+        setNotifications([]);
+        showToast('error', isAr ? 'تعذر تحميل الإشعارات' : 'Unable to load notifications');
+      }
+    );
 
     const unsubChats = onSnapshot(query(collection(db,'chats'), where('userId','==',user.uid)), async s => {
       if(s.empty) {
@@ -178,13 +224,29 @@ function App() {
       showToast('error', 'تعذر تحميل محادثة الدعم: ' + err.message);
     });
 
-    return () => { settingsUnsub(); unsub(); unsubChats(); };
+    return () => { settingsUnsub(); unsub(); myTasksUnsubs.forEach(unsubTask=>unsubTask()); notificationsUnsub(); unsubChats(); };
   },[loading, user]);
+
+  const markNotificationRead = async notification => {
+    if(!notification || notification.isRead) return;
+    try {
+      await updateDoc(doc(db,'notifications',notification.id),{isRead:true});
+    } catch(err) {
+      showToast('error', (isAr ? 'تعذر تحديث الإشعار: ' : 'Unable to update notification: ') + err.message);
+    }
+  };
+  const markAllNotificationsRead = async () => {
+    try {
+      await Promise.all(notifications.filter(n=>!n.isRead).map(n=>updateDoc(doc(db,'notifications',n.id),{isRead:true})));
+    } catch(err) {
+      showToast('error', (isAr ? 'تعذر تحديث الإشعارات: ' : 'Unable to update notifications: ') + err.message);
+    }
+  };
 
   // Share browser location while the volunteer has active field tasks.
   useEffect(()=>{
     if(loading || !user || !navigator.geolocation) return;
-    const activeTaskIds = myTasks.filter(t=>t.status==='assigned').map(t=>t.id);
+    const activeTaskIds = myTasks.filter(t=>t.status!=='completed').map(t=>t.id);
     if(!activeTaskIds.length) return;
 
     const writeLocation = position => setDoc(doc(db,'volunteerLocations',user.uid), {
@@ -316,7 +378,7 @@ function App() {
               <i className={`bi ${n.icon} nav-icon`}></i>
               <span style={{flex:1}}>{n.l}</span>
               {n.id==='tasks' && tasks.length>0 && <span className="nav-badge" style={{background:'var(--brand-500)'}}>{tasks.length}</span>}
-              {n.id==='my-tasks' && myTasks.filter(t=>t.status==='assigned').length>0 && <span className="nav-badge">{myTasks.filter(t=>t.status==='assigned').length}</span>}
+              {n.id==='my-tasks' && myTasks.filter(t=>t.status!=='completed').length>0 && <span className="nav-badge">{myTasks.filter(t=>t.status!=='completed').length}</span>}
             </div>
           ))}
         </nav>
@@ -347,6 +409,25 @@ function App() {
             <div className="topbar-title">{NAV.find(n=>n.id===page)?.l || (isAr ? 'تكافل' : 'Takaful')}</div>
           </div>
           <div className="topbar-actions" style={{display:'flex',alignItems:'center',gap:10}}>
+            <div className="notification-control" style={{position:'relative'}}>
+              <button type="button" className="btn btn-icon" aria-label={isAr?'الإشعارات':'Notifications'} aria-expanded={showNotifications} onClick={()=>setShowNotifications(v=>!v)} style={{position:'relative'}}>
+                <i className="bi bi-bell-fill"></i>
+                {notifications.filter(n=>!n.isRead).length>0&&<span style={{position:'absolute',top:-4,insetInlineEnd:-4,minWidth:17,height:17,borderRadius:20,background:'var(--red)',color:'#fff',fontSize:10,fontWeight:800,display:'grid',placeItems:'center',padding:'0 3px'}}>{notifications.filter(n=>!n.isRead).length>9?'9+':notifications.filter(n=>!n.isRead).length}</span>}
+              </button>
+              {showNotifications&&<div className="volunteer-notification-menu">
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'6px 8px 10px'}}>
+                  <strong>{isAr?'الإشعارات':'Notifications'}</strong>
+                  {notifications.some(n=>!n.isRead)&&<button type="button" className="btn btn-outline btn-sm" onClick={markAllNotificationsRead}>{isAr?'تحديد الكل كمقروء':'Mark all read'}</button>}
+                </div>
+                {notifications.length===0
+                  ? <div style={{padding:14,textAlign:'center',color:'var(--text-muted)'}}>{isAr?'لا توجد إشعارات حتى الآن':'No notifications yet'}</div>
+                  : notifications.slice(0,8).map(n=><div key={n.id} className={`volunteer-notification-row ${n.isRead?'':'unread'}`} onClick={()=>markNotificationRead(n)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'||e.key===' ')markNotificationRead(n);}}>
+                      <div style={{fontWeight:800,fontSize:13}}>{n.title||(isAr?'تحديث جديد':'New update')}</div>
+                      <div style={{fontSize:12,color:'var(--text-secondary)',marginTop:4}}>{n.message||''}</div>
+                      <div style={{fontSize:11,color:'var(--text-muted)',marginTop:6}}>{formatNotificationTime(n.timestamp,isAr)}</div>
+                    </div>)}
+              </div>}
+            </div>
             {/* Language Toggle */}
             <button onClick={toggleLang} className={`language-toggle ${isAr ? 'is-ar' : 'is-en'}`} title={isAr ? 'Switch to English' : 'التبديل للعربية'}>
               <span className={`language-toggle-icon ${isAr ? 'flag-uk' : 'flag-sudan'}`} aria-hidden="true">{isAr ? '🇬🇧' : '🇸🇩'}</span>
@@ -382,7 +463,7 @@ function App() {
               {page==='tasks' && <TasksPage tasks={tasks} user={user} onAccept={()=>setPage('my-tasks')} isAr={isAr} />}
               {page==='my-tasks' && <MyTasksPage tasks={myTasks} isAr={isAr} />}
               {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} isAr={isAr} />}
-              {page==='profile' && <ProfilePage profile={profile} tasks={myTasks} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
+              {page==='profile' && <ProfilePage profile={profile} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
             </>
           )}
         </main>
@@ -406,8 +487,10 @@ function TasksPage({tasks, user, onAccept, isAr}) {
     try {
       await updateDoc(doc(db,'cases',taskId), {
         volunteerId: user.uid,
+        assignedVolunteerId: user.uid,
         status: 'assigned',
-        assignedAt: serverTimestamp()
+        assignedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       });
       showToast('success', isAr ? 'تم قبول المهمة بنجاح، انتقل لمهامي للتفاصيل.' : 'Task accepted! Go to My Tasks for details.');
       onAccept();
@@ -460,12 +543,30 @@ function TasksPage({tasks, user, onAccept, isAr}) {
 function MyTasksPage({tasks, isAr}) {
   const [completingTask, setCompletingTask] = useState(null);
 
-  const activeTasks = tasks.filter(t=>t.status==='assigned');
+  const activeTasks = tasks.filter(t=>t.status!=='completed');
   const completedTasks = tasks.filter(t=>t.status==='completed');
 
   return (
     <div>
       {completingTask && <CompleteTaskModal task={completingTask} onClose={()=>setCompletingTask(null)} isAr={isAr} />}
+
+      <div className="profile-stats" style={{marginBottom:24}}>
+        <div className="profile-stat">
+          <div className="profile-stat-label"><i className="bi bi-list-check"></i> {isAr ? 'إجمالي مهامي' : 'My Tasks Total'}</div>
+          <div className="profile-stat-value">{fmtNum(tasks.length)}</div>
+        </div>
+        <div className="profile-stat">
+          <div className="profile-stat-label"><i className="bi bi-person-workspace"></i> {isAr ? 'قيد التنفيذ' : 'In Progress'}</div>
+          <div className="profile-stat-value">{fmtNum(activeTasks.length)}</div>
+        </div>
+        <div className="profile-stat">
+          <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> {isAr ? 'مكتملة' : 'Completed'}</div>
+          <div className="profile-stat-value">{fmtNum(completedTasks.length)}</div>
+        </div>
+      </div>
+      <div style={{marginTop:-16,marginBottom:24,fontSize:12,color:'var(--text-muted)'}}>
+        {isAr ? 'تعرض هذه الإحصاءات مهامك المسندة إليك فقط.' : 'These statistics include only tasks assigned to you.'}
+      </div>
 
       <div className="section-header" style={{marginBottom:20}}>
         <div className="section-title"><div className="section-bar"></div>{isAr ? `المهام الحالية (${activeTasks.length})` : `Active Tasks (${activeTasks.length})`}</div>
@@ -537,7 +638,10 @@ function CompleteTaskModal({task, onClose, isAr}) {
         status: 'completed',
         completedAt: serverTimestamp(),
         proofUrl: proofUrl,
-        volunteerNotes: notes
+        volunteerReportImage: proofUrl,
+        volunteerReport: notes,
+        volunteerNotes: notes,
+        updatedAt: serverTimestamp()
       });
       showToast('success', isAr ? 'شكراً لجهودك! تم إكمال المهمة بنجاح.' : 'Thank you! Task completed successfully.');
       onClose();
@@ -667,7 +771,7 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
 // ═══════════════════════════════════════
 // PROFILE PAGE
 // ═══════════════════════════════════════
-function ProfilePage({profile, tasks, dark, setDark, user, setProfile, isAr}) {
+function ProfilePage({profile, dark, setDark, user, setProfile, isAr}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.name);
   const [phone, setPhone] = useState(profile.phone || '');
@@ -694,9 +798,6 @@ function ProfilePage({profile, tasks, dark, setDark, user, setProfile, isAr}) {
     finally { setSaving(false); setPhotoFile(null); }
   };
 
-  const activeTasks = tasks ? tasks.filter(t => t.status === 'assigned').length : 0;
-  const completedTasks = tasks ? tasks.filter(t => t.status === 'completed').length : 0;
-
   return (
     <div>
       {/* Header Card */}
@@ -717,12 +818,17 @@ function ProfilePage({profile, tasks, dark, setDark, user, setProfile, isAr}) {
         <div className="profile-stats">
           <div className="profile-stat">
             <div className="profile-stat-label"><i className="bi bi-person-workspace"></i> {isAr ? 'مهام قيد التنفيذ' : 'Active Tasks'}</div>
-            <div className="profile-stat-value">{activeTasks}</div>
+            <div className="profile-stat-value">—</div>
           </div>
           <div className="profile-stat">
             <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> {isAr ? 'مهام مكتملة' : 'Completed Tasks'}</div>
-            <div className="profile-stat-value">{completedTasks}</div>
+            <div className="profile-stat-value">—</div>
           </div>
+        </div>
+        <div style={{marginTop:8,fontSize:11,color:'rgba(255,255,255,0.72)'}}>
+          {isAr
+            ? 'إحصاءات المهام الشخصية غير متاحة بصلاحيات Firestore الحالية.'
+            : 'Personal task statistics are unavailable with current Firestore permissions.'}
         </div>
       </div>
 
