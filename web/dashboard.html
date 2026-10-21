@@ -381,26 +381,17 @@ function App() {
     } catch(e) { showToast('error','خطأ',e.message); }
   };
   const doDonStat = async(id,status)=>{
+    let amountWasNotApplied = false;
     try {
       await runTransaction(db, async transaction => {
         const donationRef = doc(db, 'donations', id);
         const donationSnapshot = await transaction.get(donationRef);
         if (!donationSnapshot.exists()) throw new Error('التبرع غير موجود');
         const donation = {...donationSnapshot.data(),status:normalizeDonationStatus(donationSnapshot.get('status'))};
-        if (status === 'قيد الجمع' || status === 'تم الاستلام' || status === 'تم التوزيع') {
-          if (!isDonationPaymentVerified(donation)) throw new Error('يجب تأكيد الدفع قبل متابعة التبرع');
-        }
-        if (status === 'فشل الدفع' && normalizeDonationPaymentStatus(donation.paymentStatus) !== 'failed') {
-          throw new Error('تعذر تأكيد فشل الدفع من بوابة الدفع');
-        }
-        if (status === 'تم الاستلام' && donation.status !== 'قيد الجمع') {
-          throw new Error('يجب أن يكون التبرع في مرحلة الجمع قبل تأكيد استلامه');
-        }
-        if (status === 'تم التوزيع' && donation.status !== 'تم الاستلام') {
-          throw new Error('يجب تأكيد استلام التبرع قبل توزيعه');
-        }
         const wasApplied = donation.caseAmountApplied === true || donation.status === 'تم التوزيع';
-        const shouldApply = status === 'تم الاستلام' || status === 'تم التوزيع';
+        const paymentVerified = isDonationPaymentVerified(donation);
+        const shouldApply = ['تم الاستلام', 'تم التوزيع'].includes(status) && paymentVerified;
+        amountWasNotApplied = ['تم الاستلام', 'تم التوزيع'].includes(status) && !paymentVerified;
         const amount = numericDonationAmount(donation);
         const caseRef = donation.caseId && amount > 0 && wasApplied !== shouldApply
           ? doc(db, 'cases', donation.caseId)
@@ -437,7 +428,9 @@ function App() {
         }
       });
       logActivity('تحديث تبرع', `تم تحديث حالة تبرع إلى: ${status}`);
-      showToast('success','تحديث','تم تحديث حالة التبرع ومبلغ الحالة');
+      showToast(amountWasNotApplied ? 'warning' : 'success', 'تحديث', amountWasNotApplied
+        ? 'تم تحديث الحالة؛ لن يُضاف المبلغ إلى إجمالي الحالة حتى يتم توثيق الدفع'
+        : 'تم تحديث حالة التبرع ومبلغ الحالة');
     } catch(e) { showToast('error','خطأ',e.message); }
   };
   const doReviewDonation = async(donation, status) => {
