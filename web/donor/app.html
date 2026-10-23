@@ -1658,7 +1658,7 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
               const senderDisplayName = m.senderName || (isMine ? profile.name : (isAr ? 'الدعم' : 'Support'));
               return (
               <div key={m.id} className={`chat-bubble ${isMine?'mine':'theirs'}`} style={{position:'relative'}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                <div className={`chat-message-header ${isMine?'mine':''}`} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                   {/* Avatar */}
                   {photoUrl ? (
                     <img src={photoUrl} alt={senderDisplayName} style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid rgba(255,255,255,0.2)',background:'#fff'}} />
@@ -1683,9 +1683,9 @@ function ChatPage({chats, msgs, activeChatId, setActiveChatId, msgIn, setMsgIn, 
                 )}
                 
                 {isMine && !editingMsg && (
-                  <div style={{position:'absolute', top:8, left: isAr?8:'auto', right: isAr?'auto':8, display:'flex', gap:6, opacity:0.6, transition:'opacity 0.2s'}}>
-                    <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title={isAr ? "تعديل" : "Edit"}><i className="bi bi-pencil"></i></button>
-                    <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} style={{background:'transparent',border:'none',color:'inherit',padding:2,cursor:'pointer',fontSize:'12px',borderRadius:4}} title={isAr ? "حذف" : "Delete"}><i className="bi bi-trash"></i></button>
+                  <div className="chat-message-actions">
+                    <button type="button" onClick={()=>setEditingMsg({id: m.id, text: m.text})} title={isAr ? "تعديل" : "Edit"} aria-label={isAr?'تعديل الرسالة':'Edit message'}><i className="bi bi-pencil"></i></button>
+                    <button type="button" onClick={()=>doDelMsg(activeChatId, m.id)} title={isAr ? "حذف" : "Delete"} aria-label={isAr?'حذف الرسالة':'Delete message'}><i className="bi bi-trash"></i></button>
                   </div>
                 )}
               </div>

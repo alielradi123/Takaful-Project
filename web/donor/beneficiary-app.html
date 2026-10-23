@@ -12,14 +12,10 @@
     .beneficiary-bottom-nav{display:none}
     .case-details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .case-detail-item{padding:12px;border-radius:var(--radius-md);background:var(--bg-glass);border:1px solid var(--border)}
-    .notification-menu{position:absolute;top:calc(100% + 10px);inset-inline-end:0;width:min(360px,calc(100vw - 24px));max-height:420px;overflow:auto;z-index:120;background:var(--bg-sidebar);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);padding:10px}
-    .notification-row{padding:12px;border-radius:var(--radius-sm);border-bottom:1px solid var(--border);cursor:pointer}
+    .notification-menu{position:absolute;top:120%;inset-inline-end:0;width:min(320px,calc(100vw - 24px));max-height:380px;overflow:auto;z-index:50;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:0 20px 60px rgba(0,0,0,.4);padding:0}
+    .notification-row{padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s}
     .notification-row:last-child{border-bottom:0}
-    .notification-row.unread{background:rgba(232,80,10,.08)}
-    .chat-messages{display:flex;flex-direction:column;gap:10px;max-height:min(58vh,560px);overflow-y:auto;padding:8px 4px}
-    .chat-message{max-width:min(82%,560px);padding:11px 14px;border-radius:16px;background:var(--bg-glass);border:1px solid var(--border);align-self:flex-start;overflow-wrap:anywhere}
-    html[dir="rtl"] .chat-message.mine{align-self:flex-end;background:rgba(232,80,10,.14)}
-    html[dir="ltr"] .chat-message.mine{align-self:flex-end;background:rgba(232,80,10,.14)}
+    .notification-row.unread{background:rgba(232,80,10,.05)}
     @media(max-width:768px){
       .beneficiary-bottom-nav{position:fixed;inset-inline:0;bottom:0;z-index:80;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 5px calc(8px + env(safe-area-inset-bottom));background:var(--bg-sidebar);border-top:1px solid var(--border);box-shadow:0 -8px 24px rgba(0,0,0,.16);backdrop-filter:blur(18px)}
       .beneficiary-bottom-nav button{min-width:0;border:0;background:transparent;color:var(--text-muted);font:inherit;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:5px 2px;font-size:10px;cursor:pointer}
@@ -27,6 +23,18 @@
       .beneficiary-bottom-nav button.active{color:var(--brand-500);font-weight:800}
       .case-details-grid{grid-template-columns:1fr}
       .page-content{padding-bottom:calc(90px + env(safe-area-inset-bottom))}
+    }
+    @media(max-width:576px){
+      .topbar{display:flex;gap:8px;padding:8px 10px}
+      .mobile-menu-toggle{width:36px;height:36px;flex:0 0 36px}
+      .topbar-heading{flex:1;min-width:0;padding:0;text-align:start}
+      .topbar-actions,html[dir="ltr"] .topbar-actions{position:static;display:flex!important;align-items:center;gap:4px;flex:0 0 auto;min-width:0;margin:0}
+      .topbar-actions .notification-control{position:relative!important}
+      .notification-control>button{width:38px;height:38px;padding:0!important;justify-content:center}
+      .topbar-actions .language-toggle{width:62px;min-width:62px;height:38px;padding-inline:4px;gap:2px}
+      .topbar-actions .language-toggle-icon.flag-sudan,.topbar-actions .language-toggle-icon.flag-uk{width:22px;height:22px}
+      .topbar-actions .theme-toggle{width:56px;min-width:56px!important;height:38px;min-height:38px;padding:3px!important}
+      .notification-menu{top:calc(var(--topbar-h) + env(safe-area-inset-top) + 8px)!important;right:10px!important;left:10px!important;z-index:100}
     }
   </style>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -60,7 +68,7 @@ import { auth, db } from 'firebase-config';
 import { uploadMultipleToSupabase } from '../supabase-config.js';
 import {
   collection, query, where, orderBy, onSnapshot,
-  doc, setDoc, updateDoc, writeBatch, serverTimestamp
+  doc, setDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js';
 import { requireDonorAuth, getDonorProfile, logoutDonor } from 'donor-auth';
 
@@ -119,6 +127,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const chatCreationAttempted = useRef('');
+  const [chatRetryCount, setChatRetryCount] = useState(0);
 
   const [lang, setLang] = useState(() => localStorage.getItem('takaful-lang') || 'ar');
   const isAr = lang === 'ar';
@@ -189,12 +198,16 @@ function App() {
         if(chatCreationAttempted.current===user.uid) return;
         chatCreationAttempted.current=user.uid;
         const chatRef=doc(collection(db,'chats'));
-        setDoc(chatRef,{
+        const chatData={
           userId:user.uid,
           userName:profile.name||user.displayName||user.email||'مستفيد',
           createdAt:serverTimestamp(),
           lastMessage:'',
           lastMessageTime:serverTimestamp()
+        };
+        setDoc(chatRef,chatData).then(()=>{
+          setChat({id:chatRef.id,...chatData,lastMessageTime:Date.now()});
+          setChatLoading(false);
         }).catch(error=>{
           console.error('Unable to create support chat:',error);
           chatCreationAttempted.current='';
@@ -205,6 +218,7 @@ function App() {
       }
       const docs=snapshot.docs.slice().sort((a,b)=>timestampMillis(b.data().lastMessageTime)-timestampMillis(a.data().lastMessageTime));
       const latest=docs[0];
+      chatCreationAttempted.current='';
       setChat({id:latest.id,...latest.data()});
       setChatLoading(false);
     },error=>{
@@ -213,7 +227,7 @@ function App() {
       showToast('error',isAr?'تعذر تحميل محادثة الدعم.':'Unable to load support chat.');
     });
     return ()=>unsubscribe();
-  },[loading,user,page,profile.name,isAr]);
+  },[loading,user,page,profile.name,isAr,chatRetryCount]);
 
   useEffect(()=>{
     if(!chat?.id || page!=='support') { setChatMessages([]); return; }
@@ -258,6 +272,27 @@ function App() {
     } catch(error) {
       showToast('error',(isAr?'تعذر إرسال الرسالة: ':'Could not send message: ')+error.message);
     } finally { setSendingMessage(false); }
+  };
+  const editSupportMessage = async (messageId,text) => {
+    const updatedText=text.trim();
+    if(!chat?.id||!messageId||!updatedText) return false;
+    try {
+      await updateDoc(doc(db,'chats',chat.id,'messages',messageId),{text:updatedText,updatedAt:serverTimestamp()});
+      return true;
+    } catch(error) {
+      console.error('Unable to edit beneficiary support message:',error);
+      showToast('error',(isAr?'تعذر تعديل الرسالة: ':'Could not edit message: ')+error.message);
+      return false;
+    }
+  };
+  const deleteSupportMessage = async messageId => {
+    if(!chat?.id||!messageId||!window.confirm(isAr?'حذف هذه الرسالة نهائياً؟':'Delete this message permanently?')) return;
+    try {
+      await deleteDoc(doc(db,'chats',chat.id,'messages',messageId));
+    } catch(error) {
+      console.error('Unable to delete beneficiary support message:',error);
+      showToast('error',(isAr?'تعذر حذف الرسالة: ':'Could not delete message: ')+error.message);
+    }
   };
 
   if(loading) return (
@@ -340,17 +375,22 @@ function App() {
                 <i className="bi bi-bell-fill"></i>
                 {unreadNotifications>0&&<span style={{position:'absolute',top:-4,insetInlineEnd:-4,minWidth:17,height:17,borderRadius:20,background:'var(--red)',color:'#fff',fontSize:10,fontWeight:800,display:'grid',placeItems:'center',padding:'0 3px'}}>{unreadNotifications>9?'9+':unreadNotifications}</span>}
               </button>
-              {showNotifications&&<div className="notification-menu">
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'6px 8px 10px'}}>
-                  <strong>{isAr?'الإشعارات':'Notifications'}</strong>
-                  {unreadNotifications>0&&<button type="button" className="btn btn-outline btn-sm" onClick={async()=>{await Promise.all(notifications.filter(n=>!n.isRead).map(markNotificationRead));}}>{isAr?'تحديد الكل كمقروء':'Mark all read'}</button>}
+              {showNotifications&&<>
+                <div onClick={()=>setShowNotifications(false)} style={{position:'fixed',inset:0,zIndex:40}}></div>
+                <div className="card notification-menu">
+                  <div style={{padding:'14px 16px',borderBottom:'1px solid var(--border)',fontWeight:800,display:'flex',justifyContent:'space-between',alignItems:'center',background:'linear-gradient(135deg,rgba(232,80,10,.08),transparent)',borderRadius:'var(--radius-lg) var(--radius-lg) 0 0'}}>
+                    <span style={{display:'flex',alignItems:'center',gap:8}}><i className="bi bi-bell-fill" style={{color:'var(--brand-400)'}}></i>{isAr?'الإشعارات':'Notifications'}</span>
+                    {unreadNotifications>0&&<button type="button" className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)'}} onClick={async()=>{await Promise.all(notifications.filter(n=>!n.isRead).map(markNotificationRead));}}>{isAr?'تحديد كمقروء':'Mark all read'}</button>}
+                  </div>
+                  {notifications.length===0
+                    ? <div style={{padding:28,textAlign:'center',color:'var(--text-muted)'}}><i className="bi bi-bell-slash" style={{fontSize:32,display:'block',marginBottom:10,opacity:.4}}></i>{isAr?'لا توجد إشعارات':'No notifications'}</div>
+                    : notifications.slice(0,8).map(n=><div key={n.id} className={`notification-row ${n.isRead?'':'unread'}`} onClick={()=>markNotificationRead(n)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter')markNotificationRead(n);}}>
+                      <div className="text-sm bold" style={{color:n.isRead?'var(--text-primary)':'var(--brand-400)'}}>{n.title||(isAr?'تحديث جديد':'New update')}</div>
+                      <div className="text-xs" style={{marginTop:4,color:'var(--text-secondary)'}}>{n.message||''}</div>
+                      <div className="text-xs text-muted" style={{marginTop:4}}>{formatDateTime(n.timestamp,isAr)}</div>
+                    </div>)}
                 </div>
-                {notifications.length===0?<div className="text-muted" style={{padding:14,textAlign:'center'}}>{isAr?'لا توجد إشعارات حتى الآن':'No notifications yet'}</div>:notifications.slice(0,8).map(n=><div key={n.id} className={`notification-row ${n.isRead?'':'unread'}`} onClick={()=>markNotificationRead(n)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter')markNotificationRead(n);}}>
-                  <div style={{fontWeight:800,fontSize:13}}>{n.title||(isAr?'تحديث جديد':'New update')}</div>
-                  <div style={{fontSize:12,color:'var(--text-secondary)',marginTop:4}}>{n.message||''}</div>
-                  <div className="text-xs text-muted" style={{marginTop:6}}>{formatDateTime(n.timestamp,isAr)}</div>
-                </div>)}
-              </div>}
+              </>}
             </div>
             {/* Language Toggle */}
             <button onClick={toggleLang} className={`language-toggle ${isAr ? 'is-ar' : 'is-en'}`} title={isAr ? 'Switch to English' : 'التبديل للعربية'}>
@@ -387,7 +427,7 @@ function App() {
               {page==='home' && <HomePage cases={myCases} profile={profile} onGoSubmit={()=>openPage('submit')} onGoCases={()=>openPage('cases')} onSelectCase={setSelectedCase} isAr={isAr} />}
               {page==='cases' && <MyCasesPage cases={myCases} onSelectCase={setSelectedCase} isAr={isAr} />}
               {page==='submit' && <SubmitCasePage user={user} onSuccess={()=>openPage('cases')} isAr={isAr} />}
-              {page==='support' && <SupportPage chat={chat} messages={chatMessages} loading={chatLoading} text={messageText} setText={setMessageText} sending={sendingMessage} onSend={sendSupportMessage} profile={profile} user={user} isAr={isAr} />}
+              {page==='support' && <SupportPage chat={chat} messages={chatMessages} loading={chatLoading} text={messageText} setText={setMessageText} sending={sendingMessage} onSend={sendSupportMessage} onEditMessage={editSupportMessage} onDeleteMessage={deleteSupportMessage} onRetry={()=>{chatCreationAttempted.current='';setChat(null);setChatLoading(true);setChatRetryCount(count=>count+1);}} profile={profile} user={user} isAr={isAr} />}
               {page==='profile' && <ProfilePage profile={profile} cases={myCases} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
             </>
           )}
@@ -614,35 +654,73 @@ function CaseDetailsModal({c,isAr,onClose}) {
   </div>;
 }
 
-function SupportPage({chat,messages,loading,text,setText,sending,onSend,profile,user,isAr}) {
+function SupportPage({chat,messages,loading,text,setText,sending,onSend,onEditMessage,onDeleteMessage,onRetry,profile,user,isAr}) {
   const messagesEndRef=useRef(null);
+  const [editingMessage,setEditingMessage]=useState(null);
   useEffect(()=>{messagesEndRef.current?.scrollIntoView({behavior:'smooth',block:'end'});},[messages]);
   const messageTime=m=>formatDateTime(m.createdAt||m.timestamp,isAr);
-  return <div style={{maxWidth:860,margin:'0 auto'}}>
-    <div className="section-header" style={{marginBottom:18}}>
+  const saveEdit=async messageId=>{
+    if(!editingMessage||editingMessage.id!==messageId) return;
+    if(await onEditMessage(messageId,editingMessage.text)) setEditingMessage(null);
+  };
+  return <div>
+    <div className="section-header" style={{marginBottom:20}}>
       <div className="section-title"><div className="section-bar"></div>{isAr?'الدعم والمحادثات':'Support chat'}</div>
     </div>
-    <div className="card" style={{padding:16}}>
-      <div style={{display:'flex',alignItems:'center',gap:12,padding:'4px 4px 14px',borderBottom:'1px solid var(--border)'}}>
-        <div className="avatar"><i className="bi bi-headset"></i></div>
-        <div><strong>{isAr?'فريق الدعم':'Support team'}</strong><div className="text-xs text-muted">{isAr?'أرسل رسالتك وسيرد عليك فريق الإدارة':'Send a message and the admin team will reply'}</div></div>
-        <span className="badge badge-status-distributed" style={{marginInlineStart:'auto'}}><i className="bi bi-circle-fill" style={{fontSize:7,marginInlineEnd:5}}></i>{isAr?'محادثة مباشرة':'Live chat'}</span>
-      </div>
-      {loading&&!chat?<div className="empty-state"><div className="spinner"></div><p>{isAr?'جارٍ فتح المحادثة...':'Opening chat...'}</p></div>:<div className="chat-messages" aria-live="polite">
-        {messages.length===0?<div className="empty-state" style={{padding:30}}><i className="bi bi-chat-dots"></i><p>{isAr?'ابدأ محادثة جديدة مع فريق الدعم':'Start a conversation with support'}</p></div>:messages.map(m=>{
-          const mine=m.senderId===user?.uid||m.sender==='user';
-          return <div className={`chat-message ${mine?'mine':''}`} key={m.id}>
-            <div style={{fontSize:11,fontWeight:800,color:'var(--brand-500)',marginBottom:4}}>{mine?(m.senderName||profile.name|| (isAr?'أنت':'You')):(m.senderName|| (isAr?'الدعم':'Support'))}</div>
-            <div style={{whiteSpace:'pre-wrap',lineHeight:1.65}}>{m.text}</div>
-            <div style={{fontSize:10,color:'var(--text-muted)',textAlign:'end',marginTop:5}}>{messageTime(m)}</div>
+    <div className="chat-container">
+      <div className="chat-messages">
+        <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',fontWeight:700,display:'flex',alignItems:'center',gap:10}}>
+          <i className="bi bi-headset" style={{color:'var(--brand-500)'}}></i>
+          {isAr?'محادثة الدعم':'Support chat'}
+          {chat&&<span className="text-xs text-muted" style={{marginInlineStart:'auto',fontWeight:400}}>{isAr?'متصل':'Online'}</span>}
+        </div>
+        <div className="chat-messages-body" aria-live="polite">
+        {loading&&!chat
+          ? <div className="empty-state"><i className="bi bi-chat-heart"></i><h3>{isAr?'جارٍ فتح المحادثة...':'Opening chat...'}</h3><div className="spinner" style={{width:'2.5rem',height:'2.5rem',margin:'16px auto'}}></div></div>
+          : !chat
+            ? <div className="empty-state" style={{padding:40}}>
+                <i className="bi bi-chat-heart" style={{fontSize:48}}></i>
+                <p>{isAr?'تعذر فتح المحادثة. تحقق من اتصالك ثم أعد المحاولة.':'Could not open the chat. Check your connection and try again.'}</p>
+                <button type="button" className="btn btn-outline" style={{width:'auto',margin:'12px auto'}} onClick={onRetry}>{isAr?'إعادة المحاولة':'Try again'}</button>
+              </div>
+            : messages.length===0
+              ? <div className="empty-state" style={{padding:40}}><i className="bi bi-chat-heart" style={{fontSize:48}}></i><h3>{isAr?'ابدأ محادثة جديدة':'Start a new conversation'}</h3><p>{isAr?'فريق الدعم جاهز لمساعدتك':'Support team is ready to help you'}</p></div>
+              : messages.map(m=>{
+          const mine=m.senderId===user?.uid;
+          const senderName=m.senderName||(mine?profile.name:(isAr?'الدعم':'Support'));
+          const photoUrl=m.senderPhotoUrl||m.photoUrl||(mine?profile.photoURL:'');
+          return <div className={`chat-bubble ${mine?'mine':'theirs'}`} key={m.id} style={{position:'relative'}}>
+            <div className={`chat-message-header ${mine?'mine':''}`} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+              {photoUrl
+                ? <img src={photoUrl} alt={senderName} style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid rgba(255,255,255,.2)',background:'#fff'}} />
+                : <div style={{width:28,height:28,borderRadius:'50%',background:mine?'rgba(255,255,255,.2)':'rgba(232,80,10,.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:mine?'rgba(255,255,255,.8)':'var(--brand-500)',flexShrink:0}}>
+                    {mine?ini(profile.name):<i className="bi bi-headset" style={{fontSize:13}}></i>}
+                  </div>}
+              <span className="text-xs" style={{opacity:.7,fontWeight:600}}>{senderName}</span>
+              {(m.createdAt||m.timestamp)&&<span className="text-xs" style={{opacity:.45,marginInlineStart:'auto'}}>{messageTime(m)}</span>}
+            </div>
+            {editingMessage?.id===m.id
+              ? <div style={{marginTop:8}}>
+                  <input className="form-input mb-2" autoFocus maxLength={2000} style={{fontSize:13,padding:6,color:'#000'}} value={editingMessage.text} onChange={event=>setEditingMessage({...editingMessage,text:event.target.value})} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();saveEdit(m.id);}}} />
+                  <div className="d-flex gap-2 justify-content-end">
+                    <button type="button" className="btn btn-sm" style={{padding:'2px 8px',fontSize:11}} onClick={()=>setEditingMessage(null)}>{isAr?'إلغاء':'Cancel'}</button>
+                    <button type="button" className="btn btn-sm btn-primary" style={{padding:'2px 8px',fontSize:11}} disabled={!editingMessage.text.trim()} onClick={()=>saveEdit(m.id)}>{isAr?'حفظ':'Save'}</button>
+                  </div>
+                </div>
+              : <div style={{paddingInlineEnd:mine?36:0,paddingInlineStart:mine?0:36,whiteSpace:'pre-wrap'}}>{m.text} {m.updatedAt&&<span style={{fontSize:10,opacity:.6}}>{isAr?'(معدل)':'(edited)'}</span>}</div>}
+            {mine&&!editingMessage&&<div className="chat-message-actions">
+              <button type="button" onClick={()=>setEditingMessage({id:m.id,text:m.text||''})} title={isAr?'تعديل':'Edit'} aria-label={isAr?'تعديل الرسالة':'Edit message'}><i className="bi bi-pencil"></i></button>
+              <button type="button" onClick={()=>onDeleteMessage(m.id)} title={isAr?'حذف':'Delete'} aria-label={isAr?'حذف الرسالة':'Delete message'}><i className="bi bi-trash"></i></button>
+            </div>}
           </div>;
         })}
         <div ref={messagesEndRef}></div>
-      </div>}
-      <form onSubmit={onSend} style={{display:'flex',gap:8,borderTop:'1px solid var(--border)',paddingTop:14}}>
-        <input className="form-input" value={text} onChange={e=>setText(e.target.value)} maxLength={2000} placeholder={isAr?'اكتب رسالتك لفريق الدعم...':'Write a message to support...'} aria-label={isAr?'رسالة الدعم':'Support message'} disabled={!chat||sending} />
-        <button type="submit" className="btn btn-primary" style={{width:'auto',flexShrink:0}} disabled={!text.trim()||!chat||sending} aria-label={isAr?'إرسال':'Send'}>{sending?<div className="spinner"></div>:<><i className="bi bi-send-fill"></i><span className="hide-mobile"> {isAr?'إرسال':'Send'}</span></>}</button>
+      </div>
+      <form className="chat-input-bar" onSubmit={onSend}>
+        <input className="chat-input" value={text} onChange={event=>setText(event.target.value)} maxLength={2000} placeholder={isAr?'اكتب رسالتك...':'Type your message...'} aria-label={isAr?'رسالة الدعم':'Support message'} disabled={!chat||sending} />
+        <button type="submit" className="chat-send-btn" disabled={!text.trim()||!chat||sending} aria-label={isAr?'إرسال':'Send'}><i className="bi bi-send-fill"></i></button>
       </form>
+    </div>
     </div>
   </div>;
 }
