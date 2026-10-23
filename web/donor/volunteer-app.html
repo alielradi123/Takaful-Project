@@ -92,7 +92,6 @@ function App() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState({name:'...',email:''});
   const [systemSettings, setSystemSettings] = useState({});
-  const [tasks, setTasks] = useState([]);
   const [myTasks, setMyTasks] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -138,24 +137,10 @@ function App() {
     return ()=>unsub&&unsub();
   },[]);
 
-  // Real-time listener for tasks (Cases assigned to volunteers or available)
+  // Load only tasks assigned to the signed-in volunteer.
   useEffect(()=>{
     if(loading||!user) return;
     const settingsUnsub = onSnapshot(doc(db,'settings','general'), s => setSystemSettings(s.exists() ? s.data() : {}));
-    // Approved cases are publicly readable; assigned/completed cases are not volunteer-readable under
-    // the current rules, so never fetch other volunteers' cases to calculate portal statistics.
-    const unsub = onSnapshot(query(collection(db,'cases'), where('status','in',['approved','active'])), s => {
-      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
-      
-      // Both the web dashboard and Android app use approved/active for approved cases.
-      const available = docs.filter(c => ['approved','active'].includes(c.status) && !c.volunteerId && !c.assignedVolunteerId && c.category === 'عيني');
-
-      setTasks(available);
-    }, err => {
-      console.error('Task listener error:', err);
-      setTasks([]);
-      showToast('error', isAr ? 'تعذر تحميل المهام المتاحة' : 'Unable to load available tasks');
-    });
     const assignedTasksByField = new Map();
     const publishAssignedTasks = () => {
       const tasksById = new Map();
@@ -224,7 +209,7 @@ function App() {
       showToast('error', 'تعذر تحميل محادثة الدعم: ' + err.message);
     });
 
-    return () => { settingsUnsub(); unsub(); myTasksUnsubs.forEach(unsubTask=>unsubTask()); notificationsUnsub(); unsubChats(); };
+    return () => { settingsUnsub(); myTasksUnsubs.forEach(unsubTask=>unsubTask()); notificationsUnsub(); unsubChats(); };
   },[loading, user]);
 
   const markNotificationRead = async notification => {
@@ -347,13 +332,11 @@ function App() {
   );
 
   const NAV = isAr ? [
-    {id:'tasks',l:'المهام المتاحة',icon:'bi-list-task'},
-    {id:'my-tasks',l:'مهامي',icon:'bi-person-workspace'},
+    {id:'tasks',l:'المهام الميدانية',icon:'bi-list-task'},
     {id:'chat',l:'الدعم والمحادثات',icon:'bi-chat-dots-fill'},
     {id:'profile',l:'حسابي',icon:'bi-person-fill'},
   ] : [
-    {id:'tasks',l:'Available Tasks',icon:'bi-list-task'},
-    {id:'my-tasks',l:'My Tasks',icon:'bi-person-workspace'},
+    {id:'tasks',l:'Field Tasks',icon:'bi-list-task'},
     {id:'chat',l:'Support & Chat',icon:'bi-chat-dots-fill'},
     {id:'profile',l:'My Profile',icon:'bi-person-fill'},
   ];
@@ -377,8 +360,7 @@ function App() {
             <div key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={()=>setPage(n.id)} role="button">
               <i className={`bi ${n.icon} nav-icon`}></i>
               <span style={{flex:1}}>{n.l}</span>
-              {n.id==='tasks' && tasks.length>0 && <span className="nav-badge" style={{background:'var(--brand-500)'}}>{tasks.length}</span>}
-              {n.id==='my-tasks' && myTasks.filter(t=>t.status!=='completed').length>0 && <span className="nav-badge">{myTasks.filter(t=>t.status!=='completed').length}</span>}
+              {n.id==='tasks' && myTasks.filter(t=>t.status!=='completed').length>0 && <span className="nav-badge" style={{background:'var(--brand-500)'}}>{myTasks.filter(t=>t.status!=='completed').length}</span>}
             </div>
           ))}
         </nav>
@@ -460,8 +442,7 @@ function App() {
             </div>
           ) : (
             <>
-              {page==='tasks' && <TasksPage tasks={tasks} user={user} onAccept={()=>setPage('my-tasks')} isAr={isAr} />}
-              {page==='my-tasks' && <MyTasksPage tasks={myTasks} isAr={isAr} />}
+              {page==='tasks' && <TasksPage myTasks={myTasks} notifications={notifications} onReadNotification={markNotificationRead} isAr={isAr} />}
               {page==='chat' && <ChatPage chats={chats} msgs={msgs} activeChatId={activeChatId} setActiveChatId={setActiveChatId} msgIn={msgIn} setMsgIn={setMsgIn} sendMsg={sendMsg} profile={profile} doDelMsg={doDelMsg} doEditMsg={doEditMsg} user={user} isAr={isAr} />}
               {page==='profile' && <ProfilePage profile={profile} dark={dark} setDark={setDark} user={user} setProfile={setProfile} isAr={isAr} />}
             </>
@@ -481,131 +462,100 @@ function SocialLinks({settings, isAr}) {
 // ═══════════════════════════════════════
 // TASKS PAGE
 // ═══════════════════════════════════════
-function TasksPage({tasks, user, onAccept, isAr}) {
-  const handleAccept = async (taskId) => {
-    if(!confirm(isAr ? 'هل أنت متأكد من قبولك لهذه المهمة الميدانية؟' : 'Are you sure you want to accept this field task?')) return;
-    try {
-      await updateDoc(doc(db,'cases',taskId), {
-        volunteerId: user.uid,
-        assignedVolunteerId: user.uid,
-        status: 'assigned',
-        assignedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-      showToast('success', isAr ? 'تم قبول المهمة بنجاح، انتقل لمهامي للتفاصيل.' : 'Task accepted! Go to My Tasks for details.');
-      onAccept();
-    } catch(err) {
-      showToast('error', (isAr ? 'خطأ: ' : 'Error: ') + err.message);
-    }
-  };
-
-  return (
-    <div>
-      <div className="section-header" style={{marginBottom:20}}>
-        <div className="section-title"><div className="section-bar"></div>{isAr ? 'المهام الميدانية المتاحة' : 'Available Field Tasks'}</div>
-      </div>
-      <div style={{marginBottom:16, color:'var(--text-secondary)', fontSize:14}}>
-        <i className="bi bi-info-circle text-brand me-1"></i>
-        {isAr ? ' المهام المعروضة هنا هي لتوصيل المساعدات العينية للمستفيدين أو الزيارات الميدانية.' : ' Tasks shown here involve delivering in-kind aid to beneficiaries or field visits.'}
-      </div>
-      
-      {tasks.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-emoji-smile text-brand"></i><h3>{isAr ? 'لا توجد مهام متاحة حالياً' : 'No Tasks Available'}</h3><p>{isAr ? 'يرجى العودة لاحقاً لاكتشاف حالات جديدة.' : 'Please check back later for new assignments.'}</p></div></div>
-      ) : (
-        <div className="cases-grid">
-          {tasks.map(t=>(
-            <div key={t.id} className="case-card" style={{display:'flex',flexDirection:'column'}}>
-              <div className="case-card-body" style={{flex:1}}>
-                <div className="case-card-title">{t.title}</div>
-                <div className="case-card-desc" style={{marginBottom:12}}>{t.description}</div>
-                
-                <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:13,color:'var(--text-secondary)'}}>
-                  <div><i className="bi bi-geo-alt-fill text-brand"></i> {isAr ? 'الموقع:' : 'Location:'} {t.location}</div>
-                  <div><i className="bi bi-calendar-event text-brand"></i> {isAr ? 'تمت الإضافة:' : 'Added:'} {fmtDate(t.createdAt)}</div>
-                </div>
-              </div>
-              <div style={{padding:'16px', borderTop:'1px solid var(--border)'}}>
-                <button className="btn btn-primary" style={{width:'100%',borderRadius:'50px'}} onClick={()=>handleAccept(t.id)}>
-                  <i className="bi bi-check2-circle"></i> {isAr ? 'قبول المهمة' : 'Accept Task'}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════
-// MY TASKS PAGE
-// ═══════════════════════════════════════
-function MyTasksPage({tasks, isAr}) {
+function TasksPage({myTasks, notifications, onReadNotification, isAr}) {
+  const [selectedTab, setSelectedTab] = useState(0);
   const [completingTask, setCompletingTask] = useState(null);
-
-  const activeTasks = tasks.filter(t=>t.status!=='completed');
-  const completedTasks = tasks.filter(t=>t.status==='completed');
+  const latestAssignedNotification = notifications.find(n=>n.type==='volunteer_task_assigned'&&!n.isRead);
+  const activeTasks = myTasks.filter(t=>t.status!=='completed');
+  const completedTasks = myTasks.filter(t=>t.status==='completed');
+  const tabs = isAr
+    ? [{label:'الحالية',icon:'bi-person-workspace',count:activeTasks.length},{label:'المنجزة',icon:'bi-check-circle-fill',count:completedTasks.length}]
+    : [{label:'Current',icon:'bi-person-workspace',count:activeTasks.length},{label:'Completed',icon:'bi-check-circle-fill',count:completedTasks.length}];
+  const visibleTasks = selectedTab===0 ? activeTasks : completedTasks;
 
   return (
     <div>
       {completingTask && <CompleteTaskModal task={completingTask} onClose={()=>setCompletingTask(null)} isAr={isAr} />}
-
-      <div className="profile-stats" style={{marginBottom:24}}>
-        <div className="profile-stat">
-          <div className="profile-stat-label"><i className="bi bi-list-check"></i> {isAr ? 'إجمالي مهامي' : 'My Tasks Total'}</div>
-          <div className="profile-stat-value">{fmtNum(tasks.length)}</div>
-        </div>
-        <div className="profile-stat">
-          <div className="profile-stat-label"><i className="bi bi-person-workspace"></i> {isAr ? 'قيد التنفيذ' : 'In Progress'}</div>
-          <div className="profile-stat-value">{fmtNum(activeTasks.length)}</div>
-        </div>
-        <div className="profile-stat">
-          <div className="profile-stat-label"><i className="bi bi-check-circle-fill"></i> {isAr ? 'مكتملة' : 'Completed'}</div>
-          <div className="profile-stat-value">{fmtNum(completedTasks.length)}</div>
-        </div>
+      {latestAssignedNotification&&<button
+        type="button"
+        onClick={()=>onReadNotification(latestAssignedNotification)}
+        style={{display:'flex',alignItems:'flex-start',gap:12,width:'100%',textAlign:'start',marginBottom:20,padding:16,borderRadius:14,border:'1px solid var(--border-brand)',background:'rgba(232,80,10,.08)',color:'var(--text-primary)',cursor:'pointer'}}
+      >
+        <i className="bi bi-bell-fill text-brand" style={{fontSize:18,marginTop:2}}></i>
+        <span>
+          <strong style={{display:'block',marginBottom:4}}>{latestAssignedNotification.title}</strong>
+          <span style={{fontSize:13,color:'var(--text-secondary)'}}>{latestAssignedNotification.message}</span>
+        </span>
+      </button>}
+      <div className="profile-stats task-stats" style={{marginBottom:20}}>
+        {tabs.map((tab,index)=>(
+          <div className="profile-stat" key={tab.label}>
+            <div className="profile-stat-label"><i className={`bi ${tab.icon}`}></i> {isAr ? `المهام ${tab.label}` : `${tab.label} Tasks`}</div>
+            <div className="profile-stat-value">{tab.count}</div>
+          </div>
+        ))}
       </div>
-      <div style={{marginTop:-16,marginBottom:24,fontSize:12,color:'var(--text-muted)'}}>
-        {isAr ? 'تعرض هذه الإحصاءات مهامك المسندة إليك فقط.' : 'These statistics include only tasks assigned to you.'}
+      <div role="tablist" aria-label={isAr ? 'تصنيف المهام' : 'Task categories'} style={{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:8,marginBottom:20,padding:5,borderRadius:14,background:'var(--bg-sidebar)',border:'1px solid var(--border)'}}>
+        {tabs.map((tab,index)=>(
+          <button
+            key={tab.label}
+            type="button"
+            role="tab"
+            aria-selected={selectedTab===index}
+            onClick={()=>setSelectedTab(index)}
+            className={selectedTab===index?'btn btn-primary':'btn btn-outline'}
+            style={{width:'100%',justifyContent:'center',gap:6,padding:'10px 6px',fontSize:13}}
+          >
+            <i className={`bi ${tab.icon}`}></i>
+            <span>{tab.label}</span>
+            <span className="nav-badge">{tab.count}</span>
+          </button>
+        ))}
       </div>
-
       <div className="section-header" style={{marginBottom:20}}>
-        <div className="section-title"><div className="section-bar"></div>{isAr ? `المهام الحالية (${activeTasks.length})` : `Active Tasks (${activeTasks.length})`}</div>
+        <div className="section-title"><div className="section-bar"></div>{isAr ? `المهام ${tabs[selectedTab].label}` : `${tabs[selectedTab].label} Tasks`}</div>
       </div>
-      {activeTasks.length === 0 ? (
-        <div className="card" style={{marginBottom:24}}><div className="empty-state"><i className="bi bi-check-all text-brand"></i><h3>{isAr ? 'ليس لديك مهام قيد التنفيذ' : 'No Active Tasks'}</h3></div></div>
-      ) : (
-        <div className="cases-grid" style={{marginBottom:24}}>
-          {activeTasks.map(t=>(
-            <div key={t.id} className="case-card" style={{border:'1px solid var(--brand-500)',boxShadow:'0 4px 12px rgba(232,80,10,0.1)'}}>
+      {visibleTasks.length === 0 ? (
+        <div className="card"><div className="empty-state">
+          <i className={`bi ${selectedTab===1?'bi-check-all':'bi-inbox'} text-brand`}></i>
+          <h3>{selectedTab===0
+            ? (isAr ? 'لا توجد مهام مسندة إليك حالياً' : 'No tasks are currently assigned to you')
+            : (isAr ? 'لا توجد مهام منجزة بعد' : 'No completed tasks yet')}</h3>
+        </div></div>
+      ) : selectedTab===1 ? (
+        <div className="cases-grid">
+          {completedTasks.map(t=>(
+            <div key={t.id} className="case-card" style={{opacity:0.85}}>
               <div className="case-card-body">
-                <span className="badge badge-urgent" style={{background:'var(--brand-500)',color:'#fff',marginBottom:10,display:'inline-block'}}>{isAr ? 'قيد التنفيذ' : 'In Progress'}</span>
+                <span className="badge badge-status-distributed" style={{marginBottom:10,display:'inline-block'}}>{isAr ? 'مكتملة' : 'Completed'}</span>
                 <div className="case-card-title">{t.title}</div>
-                <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>
+                <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:13,color:'var(--text-secondary)'}}>
                   <div><i className="bi bi-geo-alt-fill text-brand"></i> {isAr ? 'الموقع:' : 'Location:'} {t.location}</div>
-                  <div><i className="bi bi-info-circle text-brand"></i> {isAr ? 'التفاصيل:' : 'Details:'} {t.description}</div>
+                  <div><i className="bi bi-calendar-check text-brand"></i> {isAr ? 'أُنجزت في:' : 'Completed:'} {fmtDate(t.completedAt)}</div>
+                  {(t.volunteerNotes||t.volunteerReport)&&<div><i className="bi bi-chat-left-text text-brand"></i> {t.volunteerNotes||t.volunteerReport}</div>}
                 </div>
-                <button className="btn btn-approve" style={{width:'100%',borderRadius:'50px'}} onClick={()=>setCompletingTask(t)}>
-                  <i className="bi bi-clipboard-check"></i> {isAr ? 'إكمال المهمة' : 'Complete Task'}
-                </button>
               </div>
             </div>
           ))}
         </div>
-      )}
-
-      <div className="section-header" style={{marginBottom:20}}>
-        <div className="section-title"><div className="section-bar"></div>{isAr ? `المهام المنجزة (${completedTasks.length})` : `Completed Tasks (${completedTasks.length})`}</div>
-      </div>
-      {completedTasks.length === 0 ? (
-        <div className="card"><div className="empty-state"><i className="bi bi-clock-history"></i><h3>{isAr ? 'لا يوجد سجل مهام منجزة' : 'No Completed Tasks Yet'}</h3></div></div>
       ) : (
         <div className="cases-grid">
-          {completedTasks.map(t=>(
-            <div key={t.id} className="case-card" style={{opacity:0.8}}>
-              <div className="case-card-body">
-                <span className="badge badge-status-distributed" style={{marginBottom:10,display:'inline-block'}}>{isAr ? 'مكتملة' : 'Completed'}</span>
+          {visibleTasks.map(t=>(
+            <div key={t.id} className="case-card" style={{display:'flex',flexDirection:'column'}}>
+              <div className="case-card-body" style={{flex:1}}>
+                <span className="badge badge-urgent" style={{background:'var(--brand-500)',color:'#fff',marginBottom:10,display:'inline-block'}}>{isAr ? 'قيد التنفيذ' : 'In Progress'}</span>
                 <div className="case-card-title">{t.title}</div>
-                <div style={{fontSize:13,color:'var(--text-secondary)'}}>{isAr ? 'أُنجزت في:' : 'Completed on:'} {fmtDate(t.completedAt)}</div>
+                <div className="case-card-desc" style={{marginBottom:12}}>{t.description}</div>
+
+                <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:13,color:'var(--text-secondary)'}}>
+                  <div><i className="bi bi-geo-alt-fill text-brand"></i> {isAr ? 'الموقع:' : 'Location:'} {t.location}</div>
+                  <div><i className="bi bi-clock-history text-brand"></i> {isAr ? 'تاريخ الإسناد:' : 'Assigned:'} {fmtDate(t.assignedAt)}</div>
+                </div>
+              </div>
+              <div style={{padding:'16px', borderTop:'1px solid var(--border)'}}>
+                <button className="btn btn-primary" style={{width:'100%',borderRadius:'50px'}} onClick={()=>setCompletingTask(t)}>
+                  <i className="bi bi-clipboard-check"></i> {isAr ? 'إكمال المهمة' : 'Complete Task'}
+                </button>
               </div>
             </div>
           ))}

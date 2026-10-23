@@ -149,14 +149,46 @@ function AssignVolunteerModal({caseItem, users, onClose, isAr}) {
       const previousStatus = caseItem.status === 'assigned'
         ? (caseItem.statusBeforeAssignment || 'approved')
         : caseItem.status;
-      await updateDoc(doc(db, 'cases', caseItem.id), {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'cases', caseItem.id), {
         assignedVolunteerId: selectedVolunteerId,
         volunteerId: selectedVolunteerId,
         status: selectedVolunteerId ? 'assigned' : previousStatus,
-        statusBeforeAssignment: selectedVolunteerId ? previousStatus : deleteField(),
+        statusBeforeAssignment: selectedVolunteerId
+          ? previousStatus
+          : deleteField(),
         assignedAt: selectedVolunteerId ? serverTimestamp() : deleteField(),
         updatedAt: serverTimestamp()
       });
+      const notificationTargets = [];
+      if (assignedVolunteerId && assignedVolunteerId !== selectedVolunteerId) {
+        notificationTargets.push({
+          userId: assignedVolunteerId,
+          title: isAr ? 'تم إلغاء تعيين المهمة' : 'Task assignment removed',
+          message: isAr
+            ? `تم إلغاء تعيينك من مهمة "${caseItem.title}".`
+            : `You have been unassigned from "${caseItem.title}".`,
+          type: 'volunteer_task_unassigned'
+        });
+      }
+      if (selectedVolunteerId && selectedVolunteerId !== assignedVolunteerId) {
+        notificationTargets.push({
+          userId: selectedVolunteerId,
+          title: isAr ? 'تم تعيين مهمة ميدانية لك' : 'A field task was assigned to you',
+          message: isAr
+            ? `تم تعيينك لمهمة "${caseItem.title}" في ${caseItem.location || 'الموقع المحدد'}.`
+            : `You have been assigned "${caseItem.title}"${caseItem.location ? ` in ${caseItem.location}` : ''}.`,
+          type: 'volunteer_task_assigned'
+        });
+      }
+      notificationTargets.forEach(notification => {
+        batch.set(doc(collection(db, 'notifications')), {
+          ...notification,
+          isRead: false,
+          timestamp: serverTimestamp()
+        });
+      });
+      await batch.commit();
       showToast('success', isAr ? 'تم تحديث التعيين' : 'Assignment updated',
         selectedVolunteerId
           ? (isAr ? 'تم تعيين المتطوع للحالة بنجاح' : 'Volunteer assigned successfully')
@@ -1349,8 +1381,8 @@ function CasesView({cases, users, doApprove, doReject, doComplete, doDelCase, do
             <option value="all">{isAr ? 'كل الحالات' : 'All Statuses'}</option>
             <option value="pending">{isAr ? 'معلق' : 'Pending'}</option>
             <option value="approved">{isAr ? 'معتمد' : 'Approved'}</option>
-            <option value="assigned">{isAr ? 'مسندة لمتطوع' : 'Assigned'}</option>
             <option value="rejected">{isAr ? 'مرفوض' : 'Rejected'}</option>
+            <option value="assigned">{isAr ? 'مسندة لمتطوع' : 'Assigned'}</option>
             <option value="completed">{isAr ? 'مكتمل' : 'Completed'}</option>
           </select>
           <select className="form-input" style={{width:'auto',padding:'10px 14px'}} value={cat} onChange={e=>setCat(e.target.value)}>
